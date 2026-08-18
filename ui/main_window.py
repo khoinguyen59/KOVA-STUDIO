@@ -12931,7 +12931,7 @@ class VideoTranslatorGUI(QMainWindow):
         layout.setSpacing(15)
         layout.setSizeConstraint(QLayout.SetFixedSize)
 
-        remote_mode = is_remote_profile()
+        remote_mode = False
         # Transcription Engine Section
         engine_title = QLabel("Subtitle source")
         engine_title.setObjectName("statusHeadline")
@@ -13004,52 +13004,57 @@ class VideoTranslatorGUI(QMainWindow):
         divider.setStyleSheet("color: #2f4868;")
         layout.addWidget(divider)
 
-        remote_title = QLabel("Remote API")
+        remote_title = QLabel("Colab / Remote API (Dùng Colab thay GPU máy tính)")
         remote_title.setObjectName("statusHeadline")
-        remote_title.setVisible(remote_mode)
         layout.addWidget(remote_title)
+        
+        remote_enable_cb = QCheckBox("Bật chế độ dùng GPU trên Colab cho CapCap", dialog)
+        from runtime_profile import is_remote_profile
+        remote_enable_cb.setChecked(is_remote_profile())
+        remote_enable_cb.setStyleSheet("color: #d7e3f4; font-weight: bold; margin-bottom: 5px;")
+        layout.addWidget(remote_enable_cb)
 
         remote_url_layout = QVBoxLayout()
-        remote_url_label = QLabel("PC API URL:")
+        remote_url_label = QLabel("Colab API URL:")
         remote_url_edit = QLineEdit(dialog)
         remote_url_edit.setText(os.getenv("CAPCAP_REMOTE_API_URL", "http://127.0.0.1:8765"))
         remote_url_layout.addWidget(remote_url_label)
         remote_url_layout.addWidget(remote_url_edit)
-        remote_url_label.setVisible(remote_mode)
-        remote_url_edit.setVisible(remote_mode)
         layout.addLayout(remote_url_layout)
 
         remote_token_layout = QVBoxLayout()
-        remote_token_label = QLabel("API Token (optional):")
+        remote_token_label = QLabel("API Token (Copy từ màn hình Colab):")
         remote_token_edit = QLineEdit(dialog)
         remote_token_edit.setEchoMode(QLineEdit.Password)
         remote_token_edit.setText(os.getenv("CAPCAP_REMOTE_API_TOKEN", ""))
         remote_token_layout.addWidget(remote_token_label)
         remote_token_layout.addWidget(remote_token_edit)
-        remote_token_label.setVisible(remote_mode)
-        remote_token_edit.setVisible(remote_mode)
         layout.addLayout(remote_token_layout)
 
         remote_actions_layout = QHBoxLayout()
         test_remote_btn = QPushButton("Test Connection", dialog)
-        test_remote_btn.setVisible(remote_mode)
+        open_colab_btn = QPushButton("Mở Colab Bóc Băng", dialog)
         remote_actions_layout.addWidget(test_remote_btn)
+        remote_actions_layout.addWidget(open_colab_btn)
         remote_actions_layout.addStretch()
         layout.addLayout(remote_actions_layout)
 
+        def _open_colab_link():
+            import webbrowser
+            webbrowser.open("https://colab.research.google.com/github/khoinguyen59/KOVA-STUDIO/blob/main/colab/CapCap_Whisper_Colab.ipynb")
+            
+        open_colab_btn.clicked.connect(_open_colab_link)
+
         remote_hint_label = QLabel(
-            "Remote mode keeps Whisper and AI translation on your PC server. "
-            "This laptop build only sends extracted audio and subtitle segments over HTTP."
+            "Nhập URL và Token từ Colab để sử dụng GPU miễn phí cho tính năng nặng. (Chỉ áp dụng khi bạn chạy file Colab)"
         )
         remote_hint_label.setObjectName("helperLabel")
         remote_hint_label.setWordWrap(True)
-        remote_hint_label.setVisible(remote_mode)
         layout.addWidget(remote_hint_label)
 
         remote_divider = QFrame()
         remote_divider.setFrameShape(QFrame.HLine)
         remote_divider.setStyleSheet("color: #2f4868;")
-        remote_divider.setVisible(remote_mode)
         layout.addWidget(remote_divider)
 
         # AI Translation Section
@@ -13343,41 +13348,41 @@ class VideoTranslatorGUI(QMainWindow):
             with open(".env", "r", encoding="utf-8") as f:
                 env_lines = f.readlines()
         
-        if remote_mode:
-            updates = {
-                "CAPCAP_REMOTE_API_URL": remote_url_edit.text().strip() or "http://127.0.0.1:8765",
-                "CAPCAP_REMOTE_API_TOKEN": remote_token_edit.text().strip(),
-            }
+        updates = {
+            "CAPCAP_RUNTIME_PROFILE": "remote" if remote_enable_cb.isChecked() else "local",
+            "CAPCAP_REMOTE_API_URL": remote_url_edit.text().strip() or "http://127.0.0.1:8765",
+            "CAPCAP_REMOTE_API_TOKEN": remote_token_edit.text().strip(),
+        }
+        
+        if new_provider == "google":
+            updates.update({
+                "AI_POLISHER_PROVIDER": "google",
+                "OPENAI_PROVIDER": "google",
+            })
+        elif new_provider == "google_ai_studio":
+            updates.update({
+                "AI_POLISHER_PROVIDER": "google_ai_studio",
+                "OPENAI_PROVIDER": "google_ai_studio",
+                "GOOGLE_AI_STUDIO_API_KEY": new_key,
+                "GOOGLE_AI_STUDIO_MODEL": new_model or "gemini-2.5-flash",
+                "GOOGLE_AI_STUDIO_BASE_URL": new_base_url or "https://generativelanguage.googleapis.com/v1beta/openai/",
+            })
+        elif new_provider == "ollama":
+            updates.update({
+                "AI_POLISHER_PROVIDER": "ollama",
+                "OPENAI_PROVIDER": "ollama",
+                "OPENAI_API_KEY": "ollama",
+                "OPENAI_MODEL": new_model,
+                "OPENAI_BASE_URL": new_base_url or "http://localhost:11434/v1",
+            })
         else:
-            if new_provider == "google":
-                updates = {
-                    "AI_POLISHER_PROVIDER": "google",
-                    "OPENAI_PROVIDER": "google",
-                }
-            elif new_provider == "google_ai_studio":
-                updates = {
-                    "AI_POLISHER_PROVIDER": "google_ai_studio",
-                    "OPENAI_PROVIDER": "google_ai_studio",
-                    "GOOGLE_AI_STUDIO_API_KEY": new_key,
-                    "GOOGLE_AI_STUDIO_MODEL": new_model or "gemini-2.5-flash",
-                    "GOOGLE_AI_STUDIO_BASE_URL": new_base_url or "https://generativelanguage.googleapis.com/v1beta/openai/",
-                }
-            elif new_provider == "ollama":
-                updates = {
-                    "AI_POLISHER_PROVIDER": "ollama",
-                    "OPENAI_PROVIDER": "ollama",
-                    "OPENAI_API_KEY": "ollama",
-                    "OPENAI_MODEL": new_model,
-                    "OPENAI_BASE_URL": new_base_url or "http://localhost:11434/v1",
-                }
-            else:
-                updates = {
-                    "AI_POLISHER_PROVIDER": "openai",
-                    "OPENAI_PROVIDER": "openai",
-                    "OPENAI_API_KEY": new_key,
-                    "OPENAI_MODEL": new_model or "gpt-4o-mini",
-                    "OPENAI_BASE_URL": new_base_url or "https://api.openai.com/v1/",
-                }
+            updates.update({
+                "AI_POLISHER_PROVIDER": "openai",
+                "OPENAI_PROVIDER": "openai",
+                "OPENAI_API_KEY": new_key,
+                "OPENAI_MODEL": new_model or "gpt-4o-mini",
+                "OPENAI_BASE_URL": new_base_url or "https://api.openai.com/v1/",
+            })
         
         updates.update(_engine_updates)
 
