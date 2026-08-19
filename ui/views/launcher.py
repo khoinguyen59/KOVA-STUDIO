@@ -604,29 +604,8 @@ class LauncherWindow(QDialog):
             super().accept()
             return
 
-        try:
-            service = self._resource_service()
-            is_ok, missing = service.validate_device(self.selected_device)
-            if not is_ok:
-                from PySide6.QtWidgets import QMessageBox
-                labels = [label for _rid, label in missing]
-                if self.selected_device == "cpu":
-                    prefix = "CPU mode needs:"
-                else:
-                    prefix = "GPU mode needs:"
-                mb = QMessageBox(self)
-                mb.setIcon(QMessageBox.Warning)
-                mb.setWindowTitle("Missing Resources")
-                mb.setText(f"{prefix}\n\n" + "\n".join(f"- {label}" for label in labels))
-                mb.setInformativeText("Open Manage Resources to download them.")
-                mb.addButton("Manage Resources", QMessageBox.AcceptRole)
-                mb.addButton("Close", QMessageBox.RejectRole)
-                mb.setStyleSheet(MSG_STYLE)
-                mb.exec()
-                self._validate_resources_for_device()
-                return
-        except Exception as exc:
-            print(f"[Launcher] Resource validation failed: {exc}")
+        # Do not block project creation when optional local AI models are not downloaded.
+        # Users can work with subtitles, timeline, or offload processing to Colab GPU in Settings.
 
         duration = _get_video_duration(self.selected_video)
         MAX_DURATION = 7200
@@ -735,7 +714,7 @@ class LauncherWindow(QDialog):
             return
         device = self.selected_device
         is_ok, missing = service.validate_device(device)
-        self.new_btn.setEnabled(is_ok)
+        self.new_btn.setEnabled(True)
         if device == "cuda":
             has_gpu = True
             gpu_name = ""
@@ -753,8 +732,8 @@ class LauncherWindow(QDialog):
             cuda_ready = is_ok
             self._update_gpu_label(has_gpu, gpu_name, cuda_ready)
             if not cuda_ready:
-                self.gpu_btn.setEnabled(False)
-                self.gpu_btn.setText("GPU (N/A)")
+                self.gpu_btn.setEnabled(True)
+                self.gpu_btn.setText("GPU (Colab / Local)")
         elif device == "cpu":
             has_gpu, _gpu_name, cuda_ready = self._detect_gpu_with_cuda()
             gpu_usable = has_gpu and cuda_ready
@@ -770,10 +749,10 @@ class LauncherWindow(QDialog):
         else:
             labels = [label for _rid, label in missing]
             if device == "cpu":
-                prefix = "CPU mode needs:"
+                prefix = "Local CPU mode:"
             else:
-                prefix = "GPU mode needs:"
-            text = f"{prefix} {', '.join(labels)}. Open Manage Resources to set them up."
+                prefix = "Local GPU mode:"
+            text = f"{prefix} Optional local models ({', '.join(labels)}) not installed. (You can still open projects, edit, or use Colab GPU in Settings)."
             self._missing_label.setText(text)
             self._missing_label.show()
             self.new_btn.setToolTip(text)
@@ -784,7 +763,7 @@ class LauncherWindow(QDialog):
                     continue
                 widget = item.widget()
                 if isinstance(widget, ProjectCard):
-                    widget.setEnabled(is_ok)
+                    widget.setEnabled(True)
         except Exception:
             pass
 
@@ -818,13 +797,16 @@ class LauncherWindow(QDialog):
         QTimer.singleShot(0, self._load_recent)
 
     def _on_new_project(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select Video", "",
-            "Video Files (*.mp4 *.mkv *.avi *.mov *.webm);;All Files (*)"
-        )
-        if path:
-            self.selected_video = path
-            self.accept()
+        try:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Select Video", "",
+                "Video Files (*.mp4 *.mkv *.avi *.mov *.webm);;All Files (*)"
+            )
+            if path:
+                self.selected_video = path
+                self.accept()
+        except Exception as e:
+            print(f"[Launcher] Error opening file dialog: {e}")
 
     def _on_manage_resources(self):
         from views.resource_manager import open_resource_manager
@@ -1042,7 +1024,8 @@ class LauncherWindow(QDialog):
         from PySide6.QtCore import QThread, Signal
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Long Video to Split", "",
-            "Video Files (*.mp4 *.mkv *.avi *.mov *.webm);;All Files (*)"
+            "Video Files (*.mp4 *.mkv *.avi *.mov *.webm);;All Files (*)",
+            options=QFileDialog.DontUseNativeDialog
         )
         if not path:
             return

@@ -10,12 +10,12 @@ import threading
 from uuid import uuid4
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QPushButton, QToolButton, QLabel, QLineEdit,
-                             QFileDialog, QTextEdit, QComboBox,
-                             QDoubleSpinBox,
-                             QFrame, QProgressBar, QMessageBox,
-                             QScrollArea,
-                             QColorDialog, QTabWidget, QDialog, QSizePolicy, QInputDialog, QLayout)
+    QHBoxLayout, QPushButton, QToolButton, QLabel, QLineEdit,
+    QFileDialog, QTextEdit, QComboBox, QCheckBox,
+    QDoubleSpinBox,
+    QFrame, QProgressBar, QMessageBox,
+    QScrollArea,
+    QColorDialog, QTabWidget, QDialog, QSizePolicy, QInputDialog, QLayout)
 from PySide6.QtCore import Qt, QUrl, QTimer, QSettings, QEvent, Signal, QPoint, QRect
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontInfo, QIcon, QKeySequence, QPixmap, QTextCursor
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -2384,16 +2384,22 @@ class VideoTranslatorGUI(QMainWindow):
         box.setWindowTitle("CapCap Cannot Start This Step")
         box.setText(f"{action_label} cannot start because a required local component is unavailable.")
         box.setInformativeText(
-            "The exact cause is listed below. Use Manage Resources for downloadable "
-            "models, or fix the shown folder/permission problem before trying again:\n\n"
+            "The exact cause is listed below. You can download local models in Manage Resources, "
+            "or switch to free Colab GPU in Settings:\n\n"
             f"{missing_lines}"
         )
         open_btn = box.addButton("Manage Resources", QMessageBox.AcceptRole)
+        colab_btn = box.addButton("Use Colab GPU", QMessageBox.ActionRole)
         box.addButton("Close", QMessageBox.RejectRole)
         box.exec()
         if box.clickedButton() is open_btn:
             self.open_resource_manager_dialog()
+        elif box.clickedButton() is colab_btn:
+            self.open_model_settings_dialog()
         return False
+
+    def open_settings_dialog(self):
+        return self.open_model_settings_dialog()
 
     def open_resource_manager_dialog(self):
         from views.resource_manager import open_resource_manager
@@ -3387,8 +3393,10 @@ class VideoTranslatorGUI(QMainWindow):
             return
         if hasattr(self, "media_player"):
             self.media_player.clear_subtitle()
-        if hasattr(self, "video_view"):
-            self.video_view.subtitle_item.set_text_rendering(True)
+        if hasattr(self, "video_view") and hasattr(self.video_view, "subtitle_item"):
+            setter = getattr(self.video_view.subtitle_item, "set_text_rendering", None)
+            if callable(setter):
+                setter(True)
 
     def on_subtitle_position_dragged(self, x_percent: int, y_percent: int):
         """Commit a drag from the live subtitle overlay to style controls."""
@@ -11909,8 +11917,10 @@ class VideoTranslatorGUI(QMainWindow):
             self.media_player.set_subtitle_file(ass_path)
             self._loaded_live_ass_path = ass_path
             self._loaded_live_ass_signature = signature
-            if hasattr(self, "video_view"):
-                self.video_view.subtitle_item.set_text_rendering(False)
+            if hasattr(self, "video_view") and hasattr(self.video_view, "subtitle_item"):
+                setter = getattr(self.video_view.subtitle_item, "set_text_rendering", None)
+                if callable(setter):
+                    setter(False)
             self.update_playback_subtitle_highlight(int(self.media_player.position() or 0))
         except Exception as exc:
             self.runtime_log_received.emit(f"[Subtitle Background] Could not apply exact layout: {exc}")
@@ -12312,10 +12322,12 @@ class VideoTranslatorGUI(QMainWindow):
                         self.media_player.set_subtitle_file(ass_path)
                         self._loaded_live_ass_path = ass_path
                         self._loaded_live_ass_signature = getattr(self, "_live_preview_signature", None)
-                    if hasattr(self, "video_view"):
+                    if hasattr(self, "video_view") and hasattr(self.video_view, "subtitle_item"):
                         # The Qt item remains present for dragging but MPV's
                         # libass renderer supplies the visible subtitle.
-                        self.video_view.subtitle_item.set_text_rendering(False)
+                        setter = getattr(self.video_view.subtitle_item, "set_text_rendering", None)
+                        if callable(setter):
+                            setter(False)
                     position = int(self.media_player.position() or 0)
                     self.update_playback_subtitle_highlight(position)
                     return
@@ -12325,8 +12337,10 @@ class VideoTranslatorGUI(QMainWindow):
                 self.video_view.subtitle_item.hide()
             return
         self.media_player.clear_subtitle()
-        if hasattr(self, "video_view"):
-            self.video_view.subtitle_item.set_text_rendering(True)
+        if hasattr(self, "video_view") and hasattr(self.video_view, "subtitle_item"):
+            setter = getattr(self.video_view.subtitle_item, "set_text_rendering", None)
+            if callable(setter):
+                setter(True)
         position = 0
         try:
             position = int(self.media_player.position())
@@ -13015,17 +13029,21 @@ class VideoTranslatorGUI(QMainWindow):
         layout.addWidget(remote_enable_cb)
 
         remote_url_layout = QVBoxLayout()
-        remote_url_label = QLabel("Colab API URL:")
+        remote_url_label = QLabel("Colab URL:")
         remote_url_edit = QLineEdit(dialog)
-        remote_url_edit.setText(os.getenv("CAPCAP_REMOTE_API_URL", "http://127.0.0.1:8765"))
+        remote_url_edit.setPlaceholderText("https://xxxx.trycloudflare.com hoặc http://127.0.0.1:8765")
+        cur_url = os.getenv("CAPCAP_REMOTE_API_URL", "").strip()
+        if cur_url and cur_url != "http://127.0.0.1:8765":
+            remote_url_edit.setText(cur_url)
         remote_url_layout.addWidget(remote_url_label)
         remote_url_layout.addWidget(remote_url_edit)
         layout.addLayout(remote_url_layout)
 
         remote_token_layout = QVBoxLayout()
-        remote_token_label = QLabel("API Token (Copy từ màn hình Colab):")
+        remote_token_label = QLabel("API Token (Copy từ màn hình Colab nếu có):")
         remote_token_edit = QLineEdit(dialog)
         remote_token_edit.setEchoMode(QLineEdit.Password)
+        remote_token_edit.setPlaceholderText("Nhập token từ Colab (nếu có)")
         remote_token_edit.setText(os.getenv("CAPCAP_REMOTE_API_TOKEN", ""))
         remote_token_layout.addWidget(remote_token_label)
         remote_token_layout.addWidget(remote_token_edit)
@@ -13033,9 +13051,11 @@ class VideoTranslatorGUI(QMainWindow):
 
         remote_actions_layout = QHBoxLayout()
         test_remote_btn = QPushButton("Test Connection", dialog)
-        open_colab_btn = QPushButton("Mở Colab Bóc Băng", dialog)
+        open_colab_btn = QPushButton("Mở Colab", dialog)
+        open_notebooks_folder_btn = QPushButton("File Notebook (.ipynb)", dialog)
         remote_actions_layout.addWidget(test_remote_btn)
         remote_actions_layout.addWidget(open_colab_btn)
+        remote_actions_layout.addWidget(open_notebooks_folder_btn)
         remote_actions_layout.addStretch()
         layout.addLayout(remote_actions_layout)
 
@@ -13043,7 +13063,17 @@ class VideoTranslatorGUI(QMainWindow):
             import webbrowser
             webbrowser.open("https://colab.research.google.com/github/khoinguyen59/KOVA-STUDIO/blob/main/colab/CapCap_Whisper_Colab.ipynb")
             
+        def _open_notebooks_folder():
+            colab_dir = os.path.abspath(os.path.join(self.workspace_root, "colab"))
+            if not os.path.exists(colab_dir):
+                colab_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "colab"))
+            if os.path.exists(colab_dir):
+                open_folder_impl(self, colab_dir)
+            else:
+                QMessageBox.information(dialog, "Colab", f"Thư mục colab tại: {colab_dir}")
+
         open_colab_btn.clicked.connect(_open_colab_link)
+        open_notebooks_folder_btn.clicked.connect(_open_notebooks_folder)
 
         remote_hint_label = QLabel(
             "Nhập URL và Token từ Colab để sử dụng GPU miễn phí cho tính năng nặng. (Chỉ áp dụng khi bạn chạy file Colab)"

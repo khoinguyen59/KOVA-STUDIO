@@ -3,81 +3,45 @@
 from pathlib import Path
 import os
 import glob as _glob
-import faster_whisper
-import rapidocr
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
-project_root = Path(r"D:\CodingTime\CapCap")
+project_root = Path(SPECPATH)
 ui_root = project_root / "ui"
 app_root = project_root / "app"
 
-datas = [
-    (str(project_root / "assets"), "assets"),
-    (str(project_root / "bin" / "ffmpeg"), "bin/ffmpeg"),
-    (str(project_root / "bin" / "mpv"), "bin/mpv"),
-    (str(project_root / "bin" / "UVR-MDX-NET-Inst_HQ_3.onnx"), "bin"),
-    (str(project_root / "bin" / "silero_vad.onnx"), "bin"),
-    (str(project_root / "app" / "voice_preview_catalog.json"), "app"),
-    (str(project_root / "app" / "voice_download_catalog.json"), "app"),
-    (str(project_root / "app" / "voice_preview_catalog.release.json"), "app"),
-    (str(project_root / "models" / "piper" / "ngochuyen.onnx"), "models/piper"),
-    (str(project_root / "models" / "piper" / "ngochuyen.onnx.json"), "models/piper"),
-    (str(project_root / "models" / "pyannote" / "model.int8.onnx"), "models/pyannote"),
-    (str(project_root / "models" / "pyannote" / "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"), "models/pyannote"),
-    (str(project_root / "models" / "pyannote" / "LICENSE"), "models/pyannote"),
-    # Ship one ready-to-use offline transcription engine. Keep only the
-    # quantized model and vocabulary; test audio, caches, and export docs stay
-    # out of the installer and Whisper/OCR remain optional downloads.
-    (str(project_root / "models" / "sensevoice" / "model.int8.onnx"), "models/sensevoice"),
-    (str(project_root / "models" / "sensevoice" / "tokens.txt"), "models/sensevoice"),
-    (str(project_root / "bin" / "cuda12_fw" / "README.txt"), "bin/cuda12_fw"),
-    (str(project_root / "models" / "faster_whisper" / "README.txt"), "models/faster_whisper"),
-    (str(project_root / "app" / "utils" / "voice_preview_utils.py"), "utils"),
-    (str(project_root / ".env_example"), "."),
-    (os.path.join(os.path.dirname(faster_whisper.__file__), "assets"), "faster_whisper/assets"),
-    (os.path.join(os.path.dirname(rapidocr.__file__), "models"), "rapidocr/models"),
-    # RapidOCR loads these YAML files at runtime before it resolves the ONNX
-    # models.  They are data files, so PyInstaller does not always discover
-    # them from imports alone.
-    (os.path.join(os.path.dirname(rapidocr.__file__), "config.yaml"), "rapidocr"),
-    (os.path.join(os.path.dirname(rapidocr.__file__), "default_models.yaml"), "rapidocr"),
-    (str(project_root / "ui" / "views" / "editor"), "views/editor"),
+_datas_raw = [
+    (project_root / "assets", "assets"),
+    (project_root / "bin" / "ffmpeg", "bin/ffmpeg"),
+    (project_root / "bin" / "mpv", "bin/mpv"),
+    (project_root / "app" / "voice_preview_catalog.json", "app"),
+    (project_root / "app" / "voice_download_catalog.json", "app"),
+    (project_root / "app" / "voice_preview_catalog.release.json", "app"),
+    (project_root / "app" / "utils" / "voice_preview_utils.py", "utils"),
+    (project_root / ".env_example", "."),
+    (project_root / "ui" / "views" / "editor", "views/editor"),
+    (project_root / "colab", "colab"),
 ]
-datas += collect_data_files("piper")
 
-# RapidOCR selects its ONNX implementation through runtime configuration.
-# Listing only ``rapidocr`` misses these dynamically imported modules in a
-# frozen worker and can make a bundled OCR install look intermittently
-# unavailable. Collect the package's submodules, while leaving the unused
-# Torch backend excluded by the existing package exclusions below.
-rapidocr_hiddenimports = collect_submodules("rapidocr")
+datas = [(str(src), dst) for src, dst in _datas_raw if src.exists()]
+rapidocr_hiddenimports = []
 
-# Exclude heavy packages we don't use
 excludes = [
     "torch",
     "torchaudio",
     "torchvision",
     "demucs",
-    # Local AI/llama.cpp was removed from the application. Keep it out of
-    # packaged builds even if an installed dependency exposes it indirectly.
     "llama_cpp",
     "llama_cpp.*",
     "matplotlib",
-
-    "comtypes",
-    "phonenumbers",
-    "uvicorn",
-    "msgpack",
-    "orjson",
-    "safetensors",
-    "xxhash",
-    "brotli",
-    "contourpy",
-    "kiwisolver",
-    "packaging",
-    "cryptography",
-    "psutil",
-    "websockets",
+    "PyQt5",
+    "PyQt6",
+    "skimage",
+    "tensorflow",
+    "keras",
+    "pandas",
+    "statsmodels",
+    "IPython",
+    "jupyter",
 ]
 
 
@@ -91,6 +55,7 @@ a = Analysis(
         "main_window",
         "PySide6.QtSvg",
         "PySide6.QtSvgWidgets",
+        "PySide6.QtMultimedia",
         "mpv",
         "remote_api",
         "remote_api_server",
@@ -119,11 +84,13 @@ a = Analysis(
         "engines.tts_adapter",
         "engines.demucs_adapter",
         "engines.ocr_adapter",
+        "engines.remote_whisper_adapter",
+        "engines.remote_translator_adapter",
+        "engines.remote_tts_adapter",
         # Lazy-loaded translation providers
         "translation.providers.ai_polisher",
         "translation.providers.gemini_polisher",
         "translation.providers.google_web_translator",
-        "translation.providers.microsoft_translator",
         # Lazy-loaded workflows
         "workflows.prepare_workflow",
         "workflows.voice_workflow",
@@ -131,7 +98,6 @@ a = Analysis(
         # Required for voice workflow
         "utils.voice_preview_utils",
         # Required for timeline + audio
-        "numpy",
         "pydub",
         "scipy",
         "librosa",
@@ -156,14 +122,10 @@ a = Analysis(
         # modules beneath the project-level ``app`` namespace automatically.
         "app.runtime_paths",
         "runtime_profile",
-        # OCR engine
-        "rapidocr",
-        "sherpa_onnx",
         "shapely",
-        "cv2",
         "omegaconf",
         "pyclipper",
-    ] + rapidocr_hiddenimports,
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -212,10 +174,7 @@ exe = EXE(
     strip=False,
     upx=True,
     upx_dir=str(project_root / "upx"),
-    # Keep the console build as the debugging/default configuration.  The
-    # windowed production spec sets CAPCAP_WINDOWED_BUILD=1 before executing
-    # this file.
-    console=os.environ.get("CAPCAP_WINDOWED_BUILD", "0").strip() != "1",
+    console=False,
     icon=str(project_root / "assets" / "capcap.ico"),
     disable_windowed_traceback=False,
 )

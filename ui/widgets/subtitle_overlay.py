@@ -28,6 +28,24 @@ class SubtitleOverlayItem(QGraphicsItem):
         self.custom_position_enabled = False
         self.custom_x_percent = 50
         self.custom_y_percent = 86
+        self.render_text = True
+        self._editable = False
+        self._suppressed = False
+
+    def set_text_rendering(self, enabled: bool):
+        enabled = bool(enabled)
+        if getattr(self, "render_text", True) != enabled:
+            self.render_text = enabled
+            self.update()
+
+    def set_editable(self, editable: bool):
+        self._editable = bool(editable)
+        self.setFlag(QGraphicsItem.ItemIsSelectable, self._editable)
+        self.setFlag(QGraphicsItem.ItemIsMovable, self._editable)
+
+    def set_suppressed(self, suppressed: bool):
+        self._suppressed = bool(suppressed)
+        self.update()
 
     def set_text(self, text):
         new_lines = [line for line in str(text or "").splitlines() if line] or ([] if not text else [str(text)])
@@ -126,6 +144,8 @@ class SubtitleOverlayItem(QGraphicsItem):
         return QRectF(0, 0, self.W, self.H)
 
     def paint(self, painter, option, widget):
+        if not getattr(self, "render_text", True) or getattr(self, "_suppressed", False):
+            return
         if not self.current_text and not self.current_lines and not self.isVisible():
             return
         painter.setRenderHint(QPainter.Antialiasing)

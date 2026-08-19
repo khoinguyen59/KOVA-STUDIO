@@ -293,3 +293,18 @@ class VideoView(QGraphicsView):
             painter.drawRoundedRect(chip_rect, 9, 9)
             painter.setPen(QColor(183, 227, 255))
             painter.drawText(chip_rect, Qt.AlignCenter, label)
+
+    def set_blur_edit_enabled(self, enabled: bool):
+        pass
+
+    def set_subtitle_render_dimensions(self, width: int, height: int):
+        pass
+
+    def set_mask_edit_enabled(self, enabled: bool):
+        pass
+
+    def set_logo_edit_enabled(self, enabled: bool):
+        pass
+
+    def set_preview_framing_edit_enabled(self, enabled: bool):
+        pass

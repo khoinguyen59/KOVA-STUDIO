@@ -114,10 +114,10 @@ class QtMediaPlayerBackend(QObject):
             self._player.setVideoOutput(video_view.video_item)
         self._player.positionChanged.connect(self.positionChanged.emit)
         self._player.durationChanged.connect(self.durationChanged.emit)
-        self._player.stateChanged.connect(lambda s: self.stateChanged.emit(int(s.value)))
-        # When the clip reaches the end, the QMediaPlayer goes to
-        # StoppedState — surface this so the timeline can stop too
-        # (Bug 2: video not pausing at end, timeline keeps running).
+        if hasattr(self._player, "playbackStateChanged"):
+            self._player.playbackStateChanged.connect(lambda s: self.stateChanged.emit(int(getattr(s, "value", s))))
+        elif hasattr(self._player, "stateChanged"):
+            self._player.stateChanged.connect(lambda s: self.stateChanged.emit(int(getattr(s, "value", s))))
         self._player.mediaStatusChanged.connect(self._on_media_status)
         self._mute_original = False
         self._mute_dubbed = False
@@ -125,11 +125,11 @@ class QtMediaPlayerBackend(QObject):
     def _on_media_status(self, status):
         try:
             from PySide6.QtMultimedia import QMediaPlayer as _QMP
-            if status == _QMP.EndOfMedia:
-                # Pause (hold last frame) and emit StoppedState so the
-                # timeline play state is re-synced to "not playing".
+            end_status = getattr(_QMP.MediaStatus, "EndOfMedia", getattr(_QMP, "EndOfMedia", None))
+            if status == end_status:
                 self._player.pause()
-                self.stateChanged.emit(int(QMediaPlayer.PausedState.value))
+                paused_state = getattr(_QMP.PlaybackState, "PausedState", getattr(_QMP, "PausedState", 2))
+                self.stateChanged.emit(int(getattr(paused_state, "value", paused_state)))
         except Exception:
             pass
 
