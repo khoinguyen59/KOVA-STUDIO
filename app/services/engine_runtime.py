@@ -33,6 +33,8 @@ class EngineRuntime:
             module_name, class_name = ("engines.remote_translator_adapter", "RemoteTranslatorAdapter")
         elif self._remote_profile and key == "tts":
             module_name, class_name = ("engines.remote_tts_adapter", "RemoteTTSAdapter")
+        elif self._remote_profile and key == "demucs":
+            module_name, class_name = ("engines.remote_vocal_adapter", "RemoteVocalAdapter")
         module = import_module(module_name)
         instance = getattr(module, class_name)()
         self._instances[key] = instance

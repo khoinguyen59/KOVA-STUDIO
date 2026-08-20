@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -15,10 +16,11 @@ class ProjectService:
         self.workspace_root = workspace_root
         self.projects_root = os.path.join(workspace_root, "projects")
 
-    def ensure_project(
+    def create_new_project(
         self,
         video_path: str,
         *,
+        project_name: str = "",
         mode: str = "subtitle",
         translator_ai: bool = True,
         translator_style: str = "",
@@ -26,24 +28,23 @@ class ProjectService:
         target_language: str = "vi",
     ) -> ProjectState:
         os.makedirs(self.projects_root, exist_ok=True)
-        project_id = self._build_project_id(video_path)
+        video_name = os.path.splitext(os.path.basename(video_path))[0] or "project"
+        slug = re.sub(r"[^a-zA-Z0-9]+", "_", video_name).strip("_").lower() or "project"
+
+        now = datetime.now()
+        timestamp = now.strftime("%Y%m%d_%H%M%S")
+        rand_suffix = hashlib.sha1(os.urandom(16)).hexdigest()[:4]
+        project_id = f"{slug}_{timestamp}_{rand_suffix}"
+
+        if not project_name:
+            project_name = f"{video_name} ({now.strftime('%d/%m/%Y %H:%M')})"
+
         project_root = os.path.join(self.projects_root, project_id)
         self._ensure_project_dirs(project_root)
- 
-        state_path = self.project_file(project_root)
-        if os.path.exists(state_path):
-            state = self.load_project(state_path)
-            state.input_video = video_path
-            state.mode = mode
-            state.translator_ai = translator_ai
-            state.translator_style = translator_style
-            state.input_language = input_language
-            state.target_language = target_language
-            self.save_project(state)
-            return state
- 
+
         state = ProjectState(
             project_id=project_id,
+            project_name=project_name,
             project_root=project_root,
             input_video=video_path,
             input_language=input_language,
@@ -54,6 +55,45 @@ class ProjectService:
         )
         self.save_project(state)
         return state
+
+    def ensure_project(
+        self,
+        video_path: str,
+        *,
+        project_id: str = "",
+        project_name: str = "",
+        mode: str = "subtitle",
+        translator_ai: bool = True,
+        translator_style: str = "",
+        input_language: str = "auto",
+        target_language: str = "vi",
+    ) -> ProjectState:
+        os.makedirs(self.projects_root, exist_ok=True)
+        if project_id:
+            project_root = os.path.join(self.projects_root, project_id)
+            state_path = self.project_file(project_root)
+            if os.path.exists(state_path):
+                state = self.load_project(state_path)
+                if video_path:
+                    state.input_video = video_path
+                state.mode = mode
+                state.translator_ai = translator_ai
+                state.translator_style = translator_style
+                state.input_language = input_language
+                state.target_language = target_language
+                if project_name:
+                    state.project_name = project_name
+                self.save_project(state)
+                return state
+        return self.create_new_project(
+            video_path=video_path,
+            project_name=project_name,
+            mode=mode,
+            translator_ai=translator_ai,
+            translator_style=translator_style,
+            input_language=input_language,
+            target_language=target_language,
+        )
 
     def load_project(self, state_path: str) -> ProjectState:
         with open(state_path, "r", encoding="utf-8") as handle:

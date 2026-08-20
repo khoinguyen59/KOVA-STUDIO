@@ -14,6 +14,8 @@ class GUIProjectBridge:
         self,
         *,
         video_path: str,
+        project_id: str = "",
+        project_name: str = "",
         mode: str,
         translator_ai: bool,
         input_language: str,
@@ -23,6 +25,8 @@ class GUIProjectBridge:
             return None
         return self.project_service.ensure_project(
             video_path,
+            project_id=project_id,
+            project_name=project_name,
             mode=mode,
             translator_ai=translator_ai,
             input_language=input_language,

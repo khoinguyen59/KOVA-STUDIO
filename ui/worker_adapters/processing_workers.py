@@ -618,50 +618,14 @@ class PrepareWorkflowWorker(QThread):
 
     def run(self):
         try:
-            from runtime_profile import is_remote_profile
-            if self.force_remote_api or is_remote_profile():
-                from remote_api import remote_api_post
-                old_url = os.environ.get("CAPCAP_REMOTE_API_URL")
-                old_token = os.environ.get("CAPCAP_REMOTE_API_TOKEN")
-                try:
-                    if self.remote_api_url:
-                        os.environ["CAPCAP_REMOTE_API_URL"] = self.remote_api_url
-                    if self.remote_api_token:
-                        os.environ["CAPCAP_REMOTE_API_TOKEN"] = self.remote_api_token
-                    response = remote_api_post(
-                        "/v1/prepare",
-                        {
-                            "workspace_root": self.workspace_root,
-                            "video_path": self.video_path,
-                            "source_language": self.source_language,
-                            "target_language": self.target_language,
-                            "mode": self.mode,
-                            "audio_handling_mode": self.audio_handling_mode,
-                            "translator_ai": self.translator_ai,
-                            "optimize_subtitles": self.optimize_subtitles,
-                            "translator_style": self.translator_style,
-                            "whisper_model_name": self.whisper_model_name,
-                            "transcription_engine": self.transcription_engine,
-                            "speaker_diarization": self.speaker_diarization,
-                            "speaker_diarization_num_speakers": self.speaker_diarization_num_speakers,
-                            "skip_translation": self.skip_translation,
-                            "prefetch_voice_name": self.prefetch_voice_name,
-                            "prefetch_voice_speed": self.prefetch_voice_speed,
-                        },
-                        timeout=3600,
-                        retries=1 if self.force_remote_api else 3,
-                    )
-                    self.finished.emit(str(response.get("project_state_path", "")), "")
-                finally:
-                    if old_url is None:
-                        os.environ.pop("CAPCAP_REMOTE_API_URL", None)
-                    else:
-                        os.environ["CAPCAP_REMOTE_API_URL"] = old_url
-                    if old_token is None:
-                        os.environ.pop("CAPCAP_REMOTE_API_TOKEN", None)
-                    else:
-                        os.environ["CAPCAP_REMOTE_API_TOKEN"] = old_token
-            else:
+            old_url = os.environ.get("CAPCAP_REMOTE_API_URL")
+            old_token = os.environ.get("CAPCAP_REMOTE_API_TOKEN")
+            try:
+                if self.remote_api_url:
+                    os.environ["CAPCAP_REMOTE_API_URL"] = self.remote_api_url
+                if self.remote_api_token:
+                    os.environ["CAPCAP_REMOTE_API_TOKEN"] = self.remote_api_token
+
                 from workflows.prepare_workflow import PrepareWorkflow
                 workflow = PrepareWorkflow(self.workspace_root)
                 project_state = workflow.run(
@@ -684,6 +648,15 @@ class PrepareWorkflowWorker(QThread):
                 )
                 state_path = os.path.join(project_state.project_root, "project.json")
                 self.finished.emit(state_path, "")
+            finally:
+                if old_url is None:
+                    os.environ.pop("CAPCAP_REMOTE_API_URL", None)
+                else:
+                    os.environ["CAPCAP_REMOTE_API_URL"] = old_url
+                if old_token is None:
+                    os.environ.pop("CAPCAP_REMOTE_API_TOKEN", None)
+                else:
+                    os.environ["CAPCAP_REMOTE_API_TOKEN"] = old_token
         except Exception as exc:
             self.finished.emit("", str(exc))
 
@@ -712,66 +685,33 @@ class VoiceOverWorker(QThread):
 
     def run(self):
         try:
-            from runtime_profile import is_remote_profile
             print(f"[VoiceOverWorker DEBUG] Starting with voice_name='{self.voice_name}'")
             self.progress.emit(f"[VoiceOverWorker DEBUG] voice_name='{self.voice_name}'")
-
-            if is_remote_profile():
-                from remote_api import remote_api_post
-                response = remote_api_post(
-                    "/v1/voice",
-                    {
-                        "workspace_root": self.workspace_root,
-                        "segments": self.segments,
-                        "output_dir": self.output_dir,
-                        "background_path": self.background_path,
-                        "audio_handling_mode": self.audio_handling_mode,
-                        "voice_name": self.voice_name,
-                        "voice_speed": self.voice_speed,
-                        "timing_sync_mode": self.timing_sync_mode,
-                        "original_volume": self.original_volume,
-                        "dub_volume": self.dub_volume,
-                        "project_state_path": self.project_state_path,
-                        "project_temp_dir": self.project_temp_dir,
-                        "ai_rewrite_dubbing": self.ai_rewrite_dubbing,
-                        "dubbing_style_instruction": self.dubbing_style_instruction,
-                        "source_language": self.source_language,
-                    },
-                    timeout=3600,
-                )
-                result = response.get("result", {})
-                self.finished.emit(
-                    result.get("voice_track", ""),
-                    result.get("mixed_path", ""),
-                    result.get("segments", []),
-                    "",
-                )
-            else:
-                from workflows.voice_workflow import VoiceWorkflow
-                workflow = VoiceWorkflow(self.workspace_root)
-                result = workflow.run(
-                    segments=self.segments,
-                    output_dir=self.output_dir,
-                    background_path=self.background_path,
-                    audio_handling_mode=self.audio_handling_mode,
-                    voice_name=self.voice_name,
-                    voice_speed=float(self.voice_speed),
-                    timing_sync_mode=self.timing_sync_mode,
-                    original_volume=int(self.original_volume),
-                    dub_volume=int(self.dub_volume),
-                    project_state_path=self.project_state_path,
-                    project_temp_dir=self.project_temp_dir,
-                    ai_rewrite_dubbing=self.ai_rewrite_dubbing,
-                    dubbing_style_instruction=self.dubbing_style_instruction,
-                    source_language=self.source_language,
-                    on_progress=self.progress.emit,
-                )
-                self.finished.emit(
-                    result.get("voice_track", ""),
-                    result.get("mixed_path", ""),
-                    result.get("segments", []),
-                    "",
-                )
+            from workflows.voice_workflow import VoiceWorkflow
+            workflow = VoiceWorkflow(self.workspace_root)
+            result = workflow.run(
+                segments=self.segments,
+                output_dir=self.output_dir,
+                background_path=self.background_path,
+                audio_handling_mode=self.audio_handling_mode,
+                voice_name=self.voice_name,
+                voice_speed=float(self.voice_speed),
+                timing_sync_mode=self.timing_sync_mode,
+                original_volume=int(self.original_volume),
+                dub_volume=int(self.dub_volume),
+                project_state_path=self.project_state_path,
+                project_temp_dir=self.project_temp_dir,
+                ai_rewrite_dubbing=self.ai_rewrite_dubbing,
+                dubbing_style_instruction=self.dubbing_style_instruction,
+                source_language=self.source_language,
+                on_progress=self.progress.emit,
+            )
+            self.finished.emit(
+                result.get("voice_track", ""),
+                result.get("mixed_path", ""),
+                result.get("segments", []),
+                "",
+            )
         except Exception as exc:
             print(f"[VoiceOverWorker ERROR] {str(exc)}")
             self.finished.emit("", "", [], str(exc))
@@ -804,60 +744,29 @@ class FinalExportWorker(QThread):
 
     def run(self):
         try:
-            from runtime_profile import is_remote_profile
-            self.progress.emit(0, "Sending export request to backend...")
-            if is_remote_profile():
-                from remote_api import remote_api_post
-                response = remote_api_post(
-                    "/v1/export",
-                    {
-                        "workspace_root": self.workspace_root,
-                        "video_path": self.video_path,
-                        "output_path": self.output_path,
-                        "mode": self.mode,
-                        "srt_path": self.srt_path,
-                        "ass_path": self.ass_path,
-                        "audio_path": self.audio_path,
-                        "subtitle_style": self.subtitle_style,
-                        "output_quality": self.output_quality,
-                        "output_fps": self.output_fps,
-                        "output_ratio": self.output_ratio,
-                        "output_scale_mode": self.output_scale_mode,
-                        "output_fill_focus_x": self.output_fill_focus_x,
-                        "output_fill_focus_y": self.output_fill_focus_y,
-                        "video_filter_state": self.video_filter_state,
-                        "original_audio_gain_db": self.original_audio_gain_db,
-                        "project_state_path": self.project_state_path,
-                        "project_temp_dir": self.project_temp_dir,
-                    },
-                    timeout=3600,
-                )
-                self.progress.emit(100, "Export complete.")
-                self.finished.emit(str(response.get("output_path", "")), "")
-            else:
-                from workflows.export_workflow import ExportWorkflow
-                workflow = ExportWorkflow(self.workspace_root)
-                output_path = workflow.run(
-                    video_path=self.video_path,
-                    output_path=self.output_path,
-                    mode=self.mode,
-                    srt_path=self.srt_path,
-                    ass_path=self.ass_path,
-                    audio_path=self.audio_path,
-                    subtitle_style=self.subtitle_style,
-                    output_quality=self.output_quality,
-                    output_fps=self.output_fps,
-                    output_ratio=self.output_ratio,
-                    output_scale_mode=self.output_scale_mode,
-                    output_fill_focus_x=self.output_fill_focus_x,
-                    output_fill_focus_y=self.output_fill_focus_y,
-                    video_filter_state=self.video_filter_state,
-                    original_audio_gain_db=self.original_audio_gain_db,
-                    project_state_path=self.project_state_path,
-                    project_temp_dir=self.project_temp_dir,
-                    on_progress=self.progress.emit,
-                )
-                self.finished.emit(output_path, "")
+            from workflows.export_workflow import ExportWorkflow
+            workflow = ExportWorkflow(self.workspace_root)
+            output_path = workflow.run(
+                video_path=self.video_path,
+                output_path=self.output_path,
+                mode=self.mode,
+                srt_path=self.srt_path,
+                ass_path=self.ass_path,
+                audio_path=self.audio_path,
+                subtitle_style=self.subtitle_style,
+                output_quality=self.output_quality,
+                output_fps=self.output_fps,
+                output_ratio=self.output_ratio,
+                output_scale_mode=self.output_scale_mode,
+                output_fill_focus_x=self.output_fill_focus_x,
+                output_fill_focus_y=self.output_fill_focus_y,
+                video_filter_state=self.video_filter_state,
+                original_audio_gain_db=self.original_audio_gain_db,
+                project_state_path=self.project_state_path,
+                project_temp_dir=self.project_temp_dir,
+                on_progress=self.progress.emit,
+            )
+            self.finished.emit(output_path, "")
         except Exception as exc:
             self.finished.emit("", str(exc))
 
@@ -883,17 +792,39 @@ class SegmentAudioPreviewWorker(QThread):
             cache_temp_dir = self.cache_temp_dir or preview_temp_dir
             os.makedirs(cache_temp_dir, exist_ok=True)
 
-            import importlib.util
-            _vpu_path = os.path.join(APP_PATH, "utils", "voice_preview_utils.py")
-            _vpu_spec = importlib.util.spec_from_file_location("_voice_preview_utils", _vpu_path)
-            _vpu = importlib.util.module_from_spec(_vpu_spec)
-            _vpu_spec.loader.exec_module(_vpu)
-            clamp_requested_speed = _vpu.clamp_requested_speed
-            load_manifest = _vpu.load_manifest
-            provider_native_speed = _vpu.provider_native_speed
-            save_manifest = _vpu.save_manifest
-            segment_cache_key = _vpu.segment_cache_key
-            voice_provider = _vpu.voice_provider
+            try:
+                from utils.voice_preview_utils import (
+                    clamp_requested_speed,
+                    load_manifest,
+                    provider_native_speed,
+                    save_manifest,
+                    segment_cache_key,
+                    voice_provider,
+                )
+            except ImportError:
+                try:
+                    from app.utils.voice_preview_utils import (
+                        clamp_requested_speed,
+                        load_manifest,
+                        provider_native_speed,
+                        save_manifest,
+                        segment_cache_key,
+                        voice_provider,
+                    )
+                except ImportError:
+                    import importlib.util
+                    _vpu_path = os.path.join(APP_PATH, "utils", "voice_preview_utils.py")
+                    if os.path.exists(_vpu_path):
+                        _vpu_spec = importlib.util.spec_from_file_location("_voice_preview_utils", _vpu_path)
+                        if _vpu_spec and _vpu_spec.loader:
+                            _vpu = importlib.util.module_from_spec(_vpu_spec)
+                            _vpu_spec.loader.exec_module(_vpu)
+                            clamp_requested_speed = _vpu.clamp_requested_speed
+                            load_manifest = _vpu.load_manifest
+                            provider_native_speed = _vpu.provider_native_speed
+                            save_manifest = _vpu.save_manifest
+                            segment_cache_key = _vpu.segment_cache_key
+                            voice_provider = _vpu.voice_provider
 
             requested_speed = clamp_requested_speed(float(self.voice_speed))
             v_provider = voice_provider(self.voice_name)

@@ -2,7 +2,7 @@ import os
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QColor, QImage, QPixmap
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
 from .advanced_tabs import build_advanced_group
 from .preview_panel import build_preview_panel
@@ -84,9 +84,31 @@ def _build_header_bar(gui):
     layout.addWidget(brand_label)
     gui.header_brand_label = brand_label
 
-    gui.project_title_label = QLabel("Project: No video selected")
+    gui.project_title_label = QLabel("Project:")
     gui.project_title_label.setObjectName("statusHeadline")
-    layout.addWidget(gui.project_title_label, 1)
+    gui.project_title_label.setStyleSheet("color: #78b8ff; font-size: 13px; font-weight: 700; margin-left: 8px;")
+    layout.addWidget(gui.project_title_label)
+
+    gui.project_name_edit = QLineEdit()
+    gui.project_name_edit.setObjectName("projectNameEdit")
+    gui.project_name_edit.setPlaceholderText("Project Name...")
+    gui.project_name_edit.setToolTip("Click to edit Project Name (Auto-saves)")
+    gui.project_name_edit.setMinimumWidth(220)
+    gui.project_name_edit.setMaximumWidth(420)
+    gui.project_name_edit.setStyleSheet(
+        "QLineEdit#projectNameEdit {"
+        "  background-color: #111a28; color: #ffffff; font-size: 13px; font-weight: 600;"
+        "  border: 1px solid #283d56; border-radius: 7px; padding: 4px 10px;"
+        "}"
+        "QLineEdit#projectNameEdit:hover {"
+        "  border-color: #436287; background-color: #142032;"
+        "}"
+        "QLineEdit#projectNameEdit:focus {"
+        "  border: 1px solid #4ecdc4; background-color: #162438;"
+        "}"
+    )
+    layout.addWidget(gui.project_name_edit)
+    layout.addSpacing(8)
     gui.run_all_btn.setMinimumHeight(42)
     layout.addWidget(gui.run_all_btn)
     gui.export_btn.setObjectName("secondaryActionBtn")
@@ -107,12 +129,22 @@ def _build_header_bar(gui):
     gui.toggle_panel_btn.clicked.connect(gui.toggle_controls_panel)
     # Hide the toggle button - the workflow panel is always visible.
     gui.toggle_panel_btn.setVisible(False)
-    layout.addWidget(gui.toggle_panel_btn)
+    gui.colab_settings_btn = QPushButton("⚡ Colab GPU")
+    gui.colab_settings_btn.setObjectName("secondaryActionBtn")
+    gui.colab_settings_btn.setMinimumHeight(42)
+    gui.colab_settings_btn.setMinimumWidth(120)
+    gui.colab_settings_btn.setToolTip("Cấu hình Colab / GPU từ xa hoặc AI Translation")
+    gui.colab_settings_btn.setStyleSheet(
+        "QPushButton#secondaryActionBtn { background-color: #1a304a; border: 1px solid #3d6a99; color: #8ad7ff; font-weight: 700; border-radius: 8px; padding: 6px 12px; }"
+        "QPushButton#secondaryActionBtn:hover { background-color: #24446a; border-color: #5bb2ff; color: #ffffff; }"
+    )
+    gui.colab_settings_btn.clicked.connect(gui.open_model_settings_dialog)
+    layout.addWidget(gui.colab_settings_btn)
 
     gui.more_actions_btn = QPushButton("More")
     gui.more_actions_btn.setObjectName("secondaryActionBtn")
     gui.more_actions_btn.setMinimumHeight(42)
-    gui.more_actions_btn.setMinimumWidth(180)
+    gui.more_actions_btn.setMinimumWidth(100)
     more_menu = QMenu(gui.more_actions_btn)
     more_menu.setObjectName("headerMoreMenu")
 
@@ -265,6 +297,8 @@ def _connect_ui_signals(gui):
     gui.final_output_folder_edit.textChanged.connect(gui.srt_output_folder_edit.setText)
     gui.video_path_edit.textChanged.connect(gui.refresh_ui_state)
     gui.video_path_edit.textChanged.connect(gui.update_project_header)
+    if hasattr(gui, "project_name_edit"):
+        gui.project_name_edit.textEdited.connect(gui.on_project_name_changed)
     gui.audio_source_edit.textChanged.connect(gui.refresh_ui_state)
     gui.bg_music_edit.textChanged.connect(gui.refresh_ui_state)
     gui.mixed_audio_edit.textChanged.connect(gui.refresh_ui_state)

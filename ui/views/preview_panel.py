@@ -33,16 +33,25 @@ from utils.media_backend import is_mpv_backend_available
 
 
 def _import_editor_timeline():
-    import importlib.util, os, sys
-    editor_dir = os.path.join(os.path.dirname(__file__), "editor")
-    path = os.path.join(editor_dir, "timeline.py")
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)
-    spec = importlib.util.spec_from_file_location("editor_timeline", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.EditorTimeline
+    try:
+        from views.editor.timeline import EditorTimeline
+        return EditorTimeline
+    except ImportError:
+        try:
+            from ui.views.editor.timeline import EditorTimeline
+            return EditorTimeline
+        except ImportError:
+            import importlib.util, os, sys
+            editor_dir = os.path.join(os.path.dirname(__file__), "editor")
+            path = os.path.join(editor_dir, "timeline.py")
+            if os.path.exists(path):
+                spec = importlib.util.spec_from_file_location("editor_timeline", path)
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    return mod.EditorTimeline
+            from editor.timeline import EditorTimeline
+            return EditorTimeline
 
 
 def _set_preview_icon_button(button: QPushButton, icon_path: str, tooltip: str):

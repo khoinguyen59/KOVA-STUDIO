@@ -534,6 +534,7 @@ class MpvMediaPlayerBackend(QObject):
     def play(self):
         if not self._source_path:
             return
+        self._resync_audio_position()
         self._player.pause = False
         if self._original_loaded_path:
             try:
@@ -998,29 +999,41 @@ class MpvMediaPlayerBackend(QObject):
             pass
         self._apply_dubbed_mute()
 
-    def _apply_current_dubbed(self):
+    def _apply_current_dubbed(self, force_reload: bool = False):
         if not self._audio_path or not os.path.exists(self._audio_path):
             return
-        if self._dubbed_loaded_path == self._audio_path:
+        try:
+            mtime = os.path.getmtime(self._audio_path)
+        except OSError:
+            mtime = 0
+        if not force_reload and self._dubbed_loaded_path == self._audio_path and getattr(self, "_dubbed_loaded_mtime", 0) == mtime:
             self._apply_dubbed_mute()
             return
         try:
+            self._dubbed_player.stop()
             self._dubbed_player.setSource(QUrl.fromLocalFile(self._audio_path))
             self._dubbed_loaded_path = self._audio_path
+            self._dubbed_loaded_mtime = mtime
         except Exception as exc:
             self.log(f"[Backend] Dubbed audio load failed: {exc}")
             return
         self._apply_dubbed_mute()
 
-    def _apply_current_original(self):
+    def _apply_current_original(self, force_reload: bool = False):
         if not self._original_audio_path or not os.path.exists(self._original_audio_path):
             return
-        if self._original_loaded_path == self._original_audio_path:
+        try:
+            mtime = os.path.getmtime(self._original_audio_path)
+        except OSError:
+            mtime = 0
+        if not force_reload and self._original_loaded_path == self._original_audio_path and getattr(self, "_original_loaded_mtime", 0) == mtime:
             self._apply_original_mute()
             return
         try:
+            self._original_player.stop()
             self._original_player.setSource(QUrl.fromLocalFile(self._original_audio_path))
             self._original_loaded_path = self._original_audio_path
+            self._original_loaded_mtime = mtime
         except Exception as exc:
             self.log(f"[Backend] Original audio load failed: {exc}")
             return
@@ -1106,7 +1119,8 @@ class MpvMediaPlayerBackend(QObject):
                 a_pos_ms = int(self._original_player.position() or 0)
             except Exception:
                 a_pos_ms = 0
-            if abs(v_pos_ms - a_pos_ms) > 300:
+            drift_limit = 200 if v_paused else 1500
+            if abs(v_pos_ms - a_pos_ms) > drift_limit:
                 try:
                     self._original_player.setPosition(int(v_pos_ms))
                 except Exception:
@@ -1129,7 +1143,8 @@ class MpvMediaPlayerBackend(QObject):
                 a_pos_ms = int(self._dubbed_player.position() or 0)
             except Exception:
                 a_pos_ms = 0
-            if abs(v_pos_ms - a_pos_ms) > 300:
+            drift_limit = 200 if v_paused else 1500
+            if abs(v_pos_ms - a_pos_ms) > drift_limit:
                 try:
                     self._dubbed_player.setPosition(int(v_pos_ms))
                 except Exception:

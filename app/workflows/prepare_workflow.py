@@ -338,7 +338,7 @@ class PrepareWorkflow:
             speaker_diarization_num_speakers = -1
         if speaker_diarization_num_speakers < 2:
             speaker_diarization_num_speakers = -1
-        is_sensevoice = transcription_engine == "sensevoice"
+        is_sensevoice = (transcription_engine == "sensevoice") and not is_remote_profile()
 
         # The GUI runs the same checks before launching the worker.  Repeat
         # them here because a frozen worker can have a different import or

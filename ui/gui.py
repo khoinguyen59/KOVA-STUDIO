@@ -4,6 +4,13 @@ import sys
 import threading
 import traceback
 
+# Always ensure ephemeral Colab credentials start completely empty for every app session.
+# AI processing remains remote-only; the pipeline opens the Colab settings when
+# the user has not supplied this session's URL and token yet.
+for _k in ("CAPCAP_REMOTE_API_URL", "CAPCAP_REMOTE_API_TOKEN"):
+    os.environ.pop(_k, None)
+os.environ["CAPCAP_RUNTIME_PROFILE"] = "remote"
+
 _SINGLE_INSTANCE_HANDLE = None
 
 
@@ -197,12 +204,13 @@ if __name__ == "__main__":
     runtime_logs = _capture_runtime_output()
     app = QApplication(sys.argv)
 
-    from views.launcher import show_launcher, LauncherWindow
-    video_path = show_launcher(None)
-    if not video_path:
+    try:
+        from views.launcher import show_launcher, LauncherWindow
+    except ImportError:
+        from ui.views.launcher import show_launcher, LauncherWindow
+    video_path, project_file = show_launcher(None)
+    if not video_path and not project_file:
         sys.exit(0)
-
-    LauncherWindow.add_recent(None, video_path)
 
     window = VideoTranslatorGUI()
     runtime_logs.attach(window)
@@ -219,8 +227,20 @@ if __name__ == "__main__":
             window.media_player.setSource(QUrl.fromLocalFile(video_path))
             if hasattr(window, "refresh_video_dimensions"):
                 window.refresh_video_dimensions(video_path)
-            window.current_project_state = window.ensure_current_project()
+            if project_file and os.path.isfile(project_file):
+                window.current_project_state = window.project_service.load_project(project_file)
+            else:
+                window.current_project_state = None
+                window.current_project_state = window.ensure_current_project()
             window.load_project_context(window.current_project_state)
+            if window.current_project_state:
+                LauncherWindow.add_recent(
+                    None,
+                    video_path,
+                    project_id=window.current_project_state.project_id,
+                    project_name=window.current_project_state.project_name,
+                    project_dir=window.current_project_state.project_root,
+                )
 
             if hasattr(window, "timeline") and hasattr(window.timeline, "set_video_source"):
                 try:

@@ -10,13 +10,35 @@ class RemoteWhisperAdapter:
     def _model_name(self, model_path: str) -> str:
         raw = os.path.basename(str(model_path or "").strip()) or str(model_path or "").strip()
         lowered = raw.lower()
+        if "large" in lowered:
+            return "large-v3"
         if "medium" in lowered:
             return "medium"
+        if "small" in lowered:
+            return "small"
         if "base" in lowered:
             return "base"
-        return raw or "base"
+        return "large-v3" if not raw else raw
 
-    def transcribe(self, audio_path: str, model_path: str, *, language: str = "auto", task: str = "transcribe"):
+    def _normalize_language(self, language: str) -> str:
+        lang = str(language or "auto").strip().lower()
+        if not lang or lang in ("auto", "none", "detect"):
+            return "auto"
+        # Extract base code e.g. zh-cn -> zh, en-us -> en, vi-vn -> vi
+        if "-" in lang:
+            lang = lang.split("-")[0].strip()
+        if "_" in lang:
+            lang = lang.split("_")[0].strip()
+        return lang
+
+    def transcribe(
+        self,
+        audio_path: str,
+        model_path: str,
+        *,
+        language: str = "auto",
+        task: str = "transcribe",
+    ):
         with open(audio_path, "rb") as handle:
             audio_b64 = base64.b64encode(handle.read()).decode("ascii")
         response = remote_api_post(
@@ -25,7 +47,7 @@ class RemoteWhisperAdapter:
                 "audio_b64": audio_b64,
                 "audio_filename": os.path.basename(audio_path),
                 "model_name": self._model_name(model_path),
-                "language": language,
+                "language": self._normalize_language(language),
                 "task": task,
             },
         )

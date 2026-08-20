@@ -36,10 +36,19 @@ def _get_session():
         path = _model_path()
         if not os.path.exists(path):
             raise FileNotFoundError(f"ONNX model not found: {path}")
-        _ONNX_SESSION = ort.InferenceSession(
-            path,
-            providers=["CPUExecutionProvider"],
-        )
+        requested_device = str(os.getenv("CAPCAP_DEVICE", "cuda") or "cuda").strip().lower()
+        if requested_device == "cpu":
+            raise RuntimeError(
+                "Vocal separation is disabled on CPU. Start the Colab All-in-One server with a GPU runtime."
+            )
+        available = set(ort.get_available_providers())
+        if "CUDAExecutionProvider" not in available:
+            raise RuntimeError(
+                "CUDAExecutionProvider is unavailable. Vocal separation requires the Colab GPU runtime."
+            )
+        _ONNX_SESSION = ort.InferenceSession(path, providers=["CUDAExecutionProvider"])
+        if "CUDAExecutionProvider" not in _ONNX_SESSION.get_providers():
+            raise RuntimeError("Vocal separation could not start with CUDAExecutionProvider.")
     return _ONNX_SESSION
 
 

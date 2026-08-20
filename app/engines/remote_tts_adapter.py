@@ -17,8 +17,6 @@ class RemoteTTSAdapter:
         tmp_dir: str | None = None,
         on_progress: callable = None,
     ) -> str:
-        if on_progress:
-            on_progress(f"Remote TTS: synthesizing with PC server ({voice})...")
         response = remote_api_post(
             "/v1/tts/synthesize",
             {

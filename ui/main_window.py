@@ -7,6 +7,13 @@ import glob
 import hashlib
 import shutil
 import threading
+
+# Always ensure ephemeral Colab credentials start completely empty for every app session.
+# The desktop client never executes heavyweight AI workloads itself.
+for _k in ("CAPCAP_REMOTE_API_URL", "CAPCAP_REMOTE_API_TOKEN"):
+    os.environ.pop(_k, None)
+os.environ["CAPCAP_RUNTIME_PROFILE"] = "remote"
+
 from uuid import uuid4
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -206,6 +213,11 @@ class VideoTranslatorGUI(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        # Ensure ephemeral Colab URL and Token always start fresh while
+        # retaining the remote-only execution policy for this desktop client.
+        os.environ.pop("CAPCAP_REMOTE_API_URL", None)
+        os.environ.pop("CAPCAP_REMOTE_API_TOKEN", None)
+        os.environ["CAPCAP_RUNTIME_PROFILE"] = "remote"
         self._current_video_path = ""
         title = "CapCap Video Translator"
         if is_remote_profile():
@@ -2464,10 +2476,14 @@ class VideoTranslatorGUI(QMainWindow):
     def resolve_selected_audio_path(self) -> str:
         if self.using_existing_audio_source():
             return self._normalize_local_file_path(self.mixed_audio_edit.text().strip())
+        state_artifacts = getattr(getattr(self, "current_project_state", None), "artifacts", {}) or {}
         candidates = [
             self.processed_artifacts.get("mixed_vi"),
             self.last_mixed_vi_path,
+            state_artifacts.get("mixed_vi"),
             self.last_voice_vi_path,
+            self.processed_artifacts.get("voice_vi"),
+            state_artifacts.get("voice_vi"),
         ]
         for candidate in candidates:
             normalized = self._normalize_local_file_path(candidate)
@@ -2478,9 +2494,11 @@ class VideoTranslatorGUI(QMainWindow):
     def _resolve_preview_voice_only_audio_path(self) -> str:
         if self.using_existing_audio_source():
             return ""
+        state_artifacts = getattr(getattr(self, "current_project_state", None), "artifacts", {}) or {}
         candidates = [
             self.processed_artifacts.get("voice_vi"),
             self.last_voice_vi_path,
+            state_artifacts.get("voice_vi"),
         ]
         for candidate in candidates:
             normalized = self._normalize_local_file_path(candidate)
@@ -3338,7 +3356,7 @@ class VideoTranslatorGUI(QMainWindow):
                 os.environ.pop("CAPCAP_REMOTE_API_TOKEN", None)
             from remote_api import remote_api_get
 
-            return remote_api_get("/health", timeout=10)
+            return remote_api_get("/health", timeout=6)
         finally:
             if previous_url:
                 os.environ["CAPCAP_REMOTE_API_URL"] = previous_url
@@ -3348,6 +3366,47 @@ class VideoTranslatorGUI(QMainWindow):
                 os.environ["CAPCAP_REMOTE_API_TOKEN"] = previous_token
             else:
                 os.environ.pop("CAPCAP_REMOTE_API_TOKEN", None)
+
+    def ensure_colab_connection(self, operation: str, required_capabilities=()) -> bool:
+        """Require a live, compatible Colab server before an AI operation.
+
+        URLs and tokens intentionally exist only in process memory.  This
+        helper centralises the pre-flight gate so individual buttons cannot
+        silently fall back to a CPU implementation on the desktop.
+        """
+        operation_name = str(operation or "AI operation").strip()
+        remote_url = os.getenv("CAPCAP_REMOTE_API_URL", "").strip()
+        remote_token = os.getenv("CAPCAP_REMOTE_API_TOKEN", "").strip()
+        if not is_remote_profile() or not remote_url or remote_url == "http://127.0.0.1:8765":
+            self.log(f"[{operation_name}] Colab GPU has not been configured for this session.")
+            self.open_model_settings_dialog(focus_colab=True)
+            return False
+        try:
+            self.log(f"[{operation_name}] Checking Colab GPU connection: {remote_url}")
+            payload = self._test_remote_api_connection(remote_url, remote_token)
+        except Exception as exc:
+            self.log(f"[{operation_name}] Colab GPU connection failed: {exc}")
+            self.open_model_settings_dialog(focus_colab=True)
+            return False
+
+        available = {
+            str(capability or "").strip()
+            for capability in list(payload.get("capabilities") or [])
+            if str(capability or "").strip()
+        }
+        required = {str(capability or "").strip() for capability in required_capabilities if str(capability or "").strip()}
+        missing = sorted(required - available)
+        if missing:
+            QMessageBox.warning(
+                self,
+                "Colab capability unavailable",
+                f"{operation_name} requires: {', '.join(missing)}.\n\n"
+                "Please run the updated CapCap All-in-One Colab notebook, then paste its new URL and token.",
+            )
+            self.open_model_settings_dialog(focus_colab=True)
+            return False
+        self.log(f"[{operation_name}] Colab GPU is ready.")
+        return True
 
     def _highlight_color_hex(self) -> str:
         mapping = {
@@ -3658,8 +3717,14 @@ class VideoTranslatorGUI(QMainWindow):
 
     def ensure_current_project(self):
         video_path = self.video_path_edit.text().strip()
+        current_id = getattr(self.current_project_state, "project_id", "") if self.current_project_state else ""
+        current_name = getattr(self.current_project_state, "project_name", "") if self.current_project_state else ""
+        if hasattr(self, "project_name_edit") and self.project_name_edit.text().strip():
+            current_name = self.project_name_edit.text().strip()
         state = self.project_bridge.ensure_project(
             video_path=video_path,
+            project_id=current_id,
+            project_name=current_name,
             mode=self.get_output_mode_key(),
             translator_ai=self.is_ai_polish_enabled(),
             input_language=self.get_source_language_code(),
@@ -3672,8 +3737,34 @@ class VideoTranslatorGUI(QMainWindow):
             state.set_setting("audio_handling_mode", audio_handling_mode)
             self.project_service.save_project(state)
         self.current_project_state = state
+        if hasattr(self, "project_name_edit"):
+            disp = state.project_name or (state.display_name() if hasattr(state, "display_name") else "")
+            if disp and self.project_name_edit.text() != disp:
+                self.project_name_edit.blockSignals(True)
+                self.project_name_edit.setText(disp)
+                self.project_name_edit.blockSignals(False)
+        title_name = getattr(state, "project_name", "") or (state.display_name() if hasattr(state, "display_name") else "CapCap")
+        self.setWindowTitle(f"CapCap - {title_name}")
         self.processed_artifacts.update(state.artifacts)
         return state
+
+    def on_project_name_changed(self, text: str):
+        if self.current_project_state:
+            self.current_project_state.set_name(text)
+            self.project_service.save_project(self.current_project_state)
+            try:
+                try:
+                    from views.launcher import LauncherWindow
+                except ImportError:
+                    from ui.views.launcher import LauncherWindow
+                LauncherWindow.update_project_name(
+                    self.current_project_state.project_id,
+                    text,
+                    self.current_project_state.input_video,
+                )
+            except Exception:
+                pass
+        self.setWindowTitle(f"CapCap - {text}" if text else "CapCap")
 
     def update_project_step(self, step_name: str, status: str):
         state = self.ensure_current_project()
@@ -4025,14 +4116,26 @@ class VideoTranslatorGUI(QMainWindow):
             self.transcript_text.setText(self.format_to_srt(self.current_segments))
         if self.current_translated_segments:
             self.translated_text.setText(self.format_to_srt(self.current_translated_segments))
+        # Update project name edit & window title
+        proj_name = getattr(state, "project_name", "") or getattr(state, "name", "")
+        if not proj_name and hasattr(state, "display_name"):
+            proj_name = state.display_name()
+        if hasattr(self, "project_name_edit") and proj_name:
+            self.project_name_edit.blockSignals(True)
+            self.project_name_edit.setText(proj_name)
+            self.project_name_edit.blockSignals(False)
+        self.setWindowTitle(f"CapCap - {proj_name}" if proj_name else "CapCap")
         if self.current_translated_segments or self.current_segments:
             self._enable_post_pipeline_preview_assets(refresh=True)
             self.apply_segments_to_timeline()
             self.set_selected_segment_index(0, sync_ui=True)
         # Restore A2 Dub track if TTS was generated
         voice_path = context.get("artifacts", {}).get("voice_vi", "")
-        if voice_path and os.path.exists(voice_path) and hasattr(self, "timeline"):
-            self.timeline.sync_tts_track(voice_path, segments=self.current_translated_segments or self.current_segments)
+        if voice_path and os.path.exists(voice_path):
+            self.last_voice_vi_path = voice_path
+            self.processed_artifacts["voice_vi"] = voice_path
+            if hasattr(self, "timeline"):
+                self.timeline.sync_tts_track(voice_path, segments=self.current_translated_segments or self.current_segments)
             # Enable Audio tab since voice generation was completed
             if hasattr(self, "audio_tab_btn"):
                 self.audio_tab_btn.setEnabled(True)
@@ -7924,6 +8027,10 @@ class VideoTranslatorGUI(QMainWindow):
             return 0.0
 
     def _is_audio_track_muted(self, track_name: str) -> bool:
+        if track_name == "A1 Audio" and getattr(self, "_mute_original", False):
+            return True
+        if track_name in ("A2 Dub", "TS1") and getattr(self, "_mute_dubbed", False):
+            return True
         meta = self._get_audio_track_meta(track_name)
         if bool(meta.get("_muted", False)):
             return True
@@ -8911,6 +9018,8 @@ class VideoTranslatorGUI(QMainWindow):
             f"[Range Transcription] Running {engine_name} for {start:.3f}s–{end:.3f}s "
             f"({mode}; {settings_summary})."
         )
+        if not self.ensure_colab_connection("Selected-range transcription", ("transcribe",)):
+            return
         worker = AlternateRangeTranscriptionWorker(
             video_path, start, end, engine_name, model, language,
             ocr_region=ocr_region, ocr_fps=ocr_fps,
@@ -12696,6 +12805,8 @@ class VideoTranslatorGUI(QMainWindow):
         if not audio_src or not os.path.exists(audio_src):
             QMessageBox.warning(self, "Error", "Please extract audio or select a source first!")
             return
+        if not self.ensure_colab_connection("Vocal separation", ("separate_vocals",)):
+            return
         
         target_dir = self.audio_folder_edit.text()
         self.progress_bar.setValue(35)
@@ -12881,11 +12992,11 @@ class VideoTranslatorGUI(QMainWindow):
     def get_whisper_model_path(self) -> str:
         return os.path.join(self.workspace_root, "models", "ggml-medium.bin")
 
-    def open_model_settings_dialog(self):
+    def open_model_settings_dialog(self, focus_colab: bool = False):
         dialog = QDialog(self)
         dialog.setWindowTitle("Settings")
         dialog.setModal(True)
-        dialog.setMinimumWidth(450)
+        dialog.setMinimumWidth(480)
         dialog.setStyleSheet(
             """
             QDialog {
@@ -13023,18 +13134,16 @@ class VideoTranslatorGUI(QMainWindow):
         layout.addWidget(remote_title)
         
         remote_enable_cb = QCheckBox("Bật chế độ dùng GPU trên Colab cho CapCap", dialog)
-        from runtime_profile import is_remote_profile
-        remote_enable_cb.setChecked(is_remote_profile())
+        remote_enable_cb.setChecked(False)
         remote_enable_cb.setStyleSheet("color: #d7e3f4; font-weight: bold; margin-bottom: 5px;")
         layout.addWidget(remote_enable_cb)
 
         remote_url_layout = QVBoxLayout()
-        remote_url_label = QLabel("Colab URL:")
+        remote_url_label = QLabel("Colab URL (Nhập link từ Colab mỗi phiên chạy):")
         remote_url_edit = QLineEdit(dialog)
-        remote_url_edit.setPlaceholderText("https://xxxx.trycloudflare.com hoặc http://127.0.0.1:8765")
-        cur_url = os.getenv("CAPCAP_REMOTE_API_URL", "").strip()
-        if cur_url and cur_url != "http://127.0.0.1:8765":
-            remote_url_edit.setText(cur_url)
+        remote_url_edit.setPlaceholderText("https://xxxx.trycloudflare.com")
+        remote_url_edit.setText("")
+        remote_url_edit.textChanged.connect(lambda text: remote_enable_cb.setChecked(bool(text.strip())))
         remote_url_layout.addWidget(remote_url_label)
         remote_url_layout.addWidget(remote_url_edit)
         layout.addLayout(remote_url_layout)
@@ -13044,10 +13153,13 @@ class VideoTranslatorGUI(QMainWindow):
         remote_token_edit = QLineEdit(dialog)
         remote_token_edit.setEchoMode(QLineEdit.Password)
         remote_token_edit.setPlaceholderText("Nhập token từ Colab (nếu có)")
-        remote_token_edit.setText(os.getenv("CAPCAP_REMOTE_API_TOKEN", ""))
+        remote_token_edit.setText("")
         remote_token_layout.addWidget(remote_token_label)
         remote_token_layout.addWidget(remote_token_edit)
         layout.addLayout(remote_token_layout)
+
+        if focus_colab:
+            remote_url_edit.setFocus()
 
         remote_actions_layout = QHBoxLayout()
         test_remote_btn = QPushButton("Test Connection", dialog)
@@ -13378,12 +13490,22 @@ class VideoTranslatorGUI(QMainWindow):
             with open(".env", "r", encoding="utf-8") as f:
                 env_lines = f.readlines()
         
-        updates = {
-            "CAPCAP_RUNTIME_PROFILE": "remote" if remote_enable_cb.isChecked() else "local",
-            "CAPCAP_REMOTE_API_URL": remote_url_edit.text().strip() or "http://127.0.0.1:8765",
-            "CAPCAP_REMOTE_API_TOKEN": remote_token_edit.text().strip(),
-        }
-        
+        is_remote = bool(remote_enable_cb.isChecked() and remote_url_edit.text().strip())
+        session_remote_url = remote_url_edit.text().strip()
+        session_remote_token = remote_token_edit.text().strip()
+
+        # The Windows application is remote-only for AI workloads. Leaving
+        # this profile remote when the session URL is blank makes operations
+        # fail fast with the Colab setup dialog instead of falling back to CPU.
+        os.environ["CAPCAP_RUNTIME_PROFILE"] = "remote"
+        if is_remote:
+            os.environ["CAPCAP_REMOTE_API_URL"] = session_remote_url
+            os.environ["CAPCAP_REMOTE_API_TOKEN"] = session_remote_token
+        else:
+            os.environ.pop("CAPCAP_REMOTE_API_URL", None)
+            os.environ.pop("CAPCAP_REMOTE_API_TOKEN", None)
+
+        updates = {}
         if new_provider == "google":
             updates.update({
                 "AI_POLISHER_PROVIDER": "google",
@@ -13422,9 +13544,8 @@ class VideoTranslatorGUI(QMainWindow):
             match = re.match(r"^([^=]+)=.*", line)
             if match:
                 k = match.group(1).strip()
-                if k == "TRANSCRIPTION_ENGINE":
-                    # Legacy global cache: source selection now belongs to
-                    # the active project and must not survive here.
+                if k in ("TRANSCRIPTION_ENGINE", "CAPCAP_REMOTE_API_URL", "CAPCAP_REMOTE_API_TOKEN", "CAPCAP_RUNTIME_PROFILE"):
+                    # Ephemeral or project-local keys must not be persisted in .env
                     continue
                 if k in updates:
                     new_env_lines.append(f"{k}={updates[k]}\n")
@@ -13443,6 +13564,8 @@ class VideoTranslatorGUI(QMainWindow):
         for k, v in updates.items():
             os.environ[k] = v
 
+        if is_remote and new_engine == "sensevoice":
+            new_engine = "whisper"
         self.set_project_transcription_engine(new_engine)
         self.save_user_settings()
         self._update_ocr_overlay()
@@ -13557,6 +13680,8 @@ class VideoTranslatorGUI(QMainWindow):
         return self._apply_speaker_voice_assignments(grouped_segments)
 
     def run_voiceover(self):
+        if not self.ensure_colab_connection("Voice generation", ("tts",)):
+            return
         if not self.ensure_required_resources("Voice generation", include_voice=True):
             return
         state = self.ensure_current_project()
@@ -13688,7 +13813,7 @@ class VideoTranslatorGUI(QMainWindow):
         self.voice_thread.start()
 
     def _apply_generated_tts_texts(self, voice_segments):
-        source_segments = self.current_translated_segments
+        source_segments = self.current_translated_segments or self.current_segments
         if not source_segments or not voice_segments:
             return False
 
@@ -13724,6 +13849,8 @@ class VideoTranslatorGUI(QMainWindow):
                 "action_taken": action_taken,
                 "ratio": ratio,
                 "attempt_count": int((seg or {}).get("attempt_count") or 1),
+                "speed_multiplier": float((seg or {}).get("speed_multiplier") or 1.0),
+                "final_duration": float((seg or {}).get("final_duration") or 0.0),
                 "start": new_start,
                 "end": new_end,
                 "_original_end": new_original_end,
@@ -13734,69 +13861,53 @@ class VideoTranslatorGUI(QMainWindow):
             else:
                 positional_updates.append(payload)
 
-        positional_index = 0
-        for seg in source_segments:
-            group_id = str((seg or {}).get("tts_group_id") or "").strip()
-            if group_id and group_id in grouped_updates:
-                next_payload = grouped_updates[group_id]
-            elif positional_index < len(positional_updates):
-                next_payload = positional_updates[positional_index]
-                positional_index += 1
-            else:
+        for idx, base in enumerate(source_segments):
+            gid = str((base or {}).get("tts_group_id") or "").strip()
+            item = grouped_updates.get(gid) if gid else (positional_updates[idx] if idx < len(positional_updates) else None)
+            if not item:
                 continue
-
-            next_tts_text = next_payload["tts_text"]
-            current_tts_text = ' '.join(str(seg.get("tts_text") or "").split()).strip()
-            if current_tts_text != next_tts_text:
-                seg["tts_text"] = next_tts_text
-                updated = True
-            seg["subtitle_vi"] = next_payload["subtitle_vi"]
-            seg["dubbing_vi"] = next_payload["dubbing_vi"]
-            seg["action_taken"] = next_payload["action_taken"]
-            seg["ratio"] = next_payload["ratio"]
-            seg["attempt_count"] = next_payload["attempt_count"]
-            # Sync start/end from the voice workflow so the SRT reflects the
-            # actual TTS audio duration (see _extend_segment_ends_to_audio).
-            new_start = next_payload.get("start")
-            new_end = next_payload.get("end")
-            if new_start is not None and new_end is not None and new_end > new_start:
-                try:
-                    old_start = float(seg.get("start", 0.0))
-                    old_end = float(seg.get("end", 0.0))
-                except (TypeError, ValueError):
-                    old_start = old_end = None
-                if old_start is not None and old_end is not None:
-                    if abs(new_start - old_start) > 0.01 or abs(new_end - old_end) > 0.01:
-                        seg["start"] = new_start
-                        seg["end"] = new_end
-                        updated = True
-            new_original_end = next_payload.get("_original_end")
-            if new_original_end is not None:
-                seg["_original_end"] = new_original_end
-            new_audio_end = next_payload.get("_audio_end")
-            if new_audio_end is not None:
-                seg["_audio_end"] = new_audio_end
-            else:
-                seg.pop("_audio_end", None)
+            base["tts_text"] = item["tts_text"]
+            base["tts_subtitle_vi"] = item["subtitle_vi"]
+            base["tts_dubbing_vi"] = item["dubbing_vi"]
+            base["tts_action_taken"] = item["action_taken"]
+            base["tts_ratio"] = item["ratio"]
+            base["tts_attempt_count"] = item["attempt_count"]
+            base["tts_speed_multiplier"] = item["speed_multiplier"]
+            base["tts_final_duration"] = item["final_duration"]
+            if item.get("start") is not None:
+                base["start"] = float(item["start"])
+            if item.get("end") is not None:
+                base["end"] = float(item["end"])
+            if item.get("_original_end") is not None:
+                base["_original_end"] = float(item["_original_end"])
+            if item.get("_audio_end") is not None:
+                base["_audio_end"] = float(item["_audio_end"])
+            updated = True
         return updated
 
     def _regenerate_translated_srt_from_segments(self):
-        """Regenerate the project SRT from current_translated_segments.
-        Called after the voice workflow extends a segment's end time to
-        match the actual TTS audio duration, so the burned-in subtitle and
-        the rendered audio stay in sync.
+        """Regenerate the project translated SRT file using updated segment timestamps.
+
+        Called after voice generation so the subtitle timings accurately
+        match any segment boundary extensions applied during TTS.
         """
-        out_path = str(getattr(self, "last_translated_srt_path", "") or "").strip()
-        if not out_path:
+        segments = list(self.current_translated_segments or self.current_segments or [])
+        if not segments:
             return
+        out_path = self.last_translated_srt_path
+        if not out_path:
+            video_path = self.video_path_edit.text().strip() if hasattr(self, "video_path_edit") else ""
+            video_name = os.path.splitext(os.path.basename(video_path or "subtitle"))[0]
+            out_path = self.get_project_temp_path("subtitle", f"{video_name}_vi.srt", create_parent=True)
+            self.last_translated_srt_path = out_path
         try:
             from subtitle_builder import generate_srt
-            generate_srt(self.current_translated_segments, out_path)
+            generate_srt(segments, out_path)
         except Exception as exc:
             print(f"[Voice] SRT regen failed: {exc}")
             return
         self.processed_artifacts["srt_translated"] = out_path
-        self.persist_translation_project_data(self.current_translated_segments, out_path)
+        self.persist_translation_project_data(segments, out_path)
 
     def on_voiceover_finished(self, voice_track, mixed, voice_segments, error):
         if hasattr(self, "voiceover_btn"):
@@ -13830,23 +13941,24 @@ class VideoTranslatorGUI(QMainWindow):
             self.update_project_step("mix_audio", "done")
         elif self.bg_music_edit.text().strip():
             self.update_project_step("mix_audio", "skipped")
-        if self._apply_generated_tts_texts(voice_segments):
+        applied = self._apply_generated_tts_texts(voice_segments)
+        if applied:
             self._single_line_split_cache = None
-            self.current_translated_segment_models = self._dict_segments_to_models(self.current_translated_segments, translated=True)
-            self._sync_hidden_translated_text_from_segments()
+            if self.current_translated_segments:
+                self.current_translated_segment_models = self._dict_segments_to_models(self.current_translated_segments, translated=True)
+                self._sync_hidden_translated_text_from_segments()
+            elif self.current_segments:
+                self.current_segment_models = self._dict_segments_to_models(self.current_segments, translated=False)
             self.apply_segments_to_timeline()
-            if hasattr(self, "timeline") and voice_track:
-                self.timeline.sync_tts_track(
-                    voice_track,
-                    segments=self.current_translated_segments or self.current_segments,
-                )
-                if hasattr(self, "voice_timing_sync_combo"):
-                    self.timeline.set_voice_sync_mode(self.voice_timing_sync_combo.currentText())
+        if hasattr(self, "timeline") and voice_track and os.path.exists(voice_track):
+            self.timeline.sync_tts_track(
+                voice_track,
+                segments=self.get_active_segments(),
+            )
+            if hasattr(self, "voice_timing_sync_combo"):
+                self.timeline.set_voice_sync_mode(self.voice_timing_sync_combo.currentText())
             self._sync_timeline_mute_to_gui()
             self.persist_current_timeline_project_data()
-            # Regenerate the project SRT from the updated segments so it
-            # reflects the actual TTS audio duration (e.g. when a segment
-            # was extended in voice_workflow._extend_segment_ends_to_audio).
             self._regenerate_translated_srt_from_segments()
             self.schedule_live_subtitle_preview_refresh()
             self.sync_segment_editor_rows()
@@ -14409,18 +14521,20 @@ class VideoTranslatorGUI(QMainWindow):
         print("[Cleanup] Worker termination complete.")
 
     def closeEvent(self, event):
+        blur_signals_were_blocked = None
         try:
             # A drag may have ended less than one debounce interval ago.
             # Flush it before teardown so the final overlay position is not
             # lost when the window is closed immediately.
             self._flush_pending_timeline_persist()
             # Persist the current blur state BEFORE clearing the overlay.
-            # Block the blurRegionChanged signal during the clear so the
-            # signal handler does not overwrite the saved state with an
-            # empty regions list.
+            # Block the signal during the clear so the handler does not
+            # overwrite the saved state with an empty regions list.  Calling
+            # Qt disconnect on a signal that may already be released emits a
+            # RuntimeWarning during shutdown, even when caught in Python.
             if hasattr(self, "video_view"):
                 try:
-                    self.video_view.blurRegionChanged.disconnect(self.on_preview_blur_region_changed)
+                    blur_signals_were_blocked = self.video_view.blockSignals(True)
                 except Exception:
                     pass
             if hasattr(self, "persist_project_blur_state"):
@@ -14438,6 +14552,11 @@ class VideoTranslatorGUI(QMainWindow):
             # removed only by the explicit clean/return workflow.
             if hasattr(self, "video_view"):
                 self.video_view.clear_blur_region()
+                if blur_signals_were_blocked is not None:
+                    try:
+                        self.video_view.blockSignals(blur_signals_were_blocked)
+                    except Exception:
+                        pass
             if hasattr(self, "media_player") and hasattr(self.media_player, "clear_mask_region"):
                 try:
                     self.media_player.clear_mask_region()
@@ -14537,13 +14656,15 @@ class VideoTranslatorGUI(QMainWindow):
 
 
 def _relaunch_launcher():
-    from views.launcher import show_launcher, LauncherWindow
-    video_path = show_launcher(None)
+    try:
+        from views.launcher import show_launcher, LauncherWindow
+    except ImportError:
+        from ui.views.launcher import show_launcher, LauncherWindow
+    video_path, project_file = show_launcher(None)
     QApplication.setQuitOnLastWindowClosed(True)
-    if not video_path:
+    if not video_path and not project_file:
         QApplication.quit()
         return
-    LauncherWindow.add_recent(None, video_path)
     new_window = VideoTranslatorGUI()
     new_window.prepare_initial_editor_layout()
     new_window.show()
@@ -14554,8 +14675,20 @@ def _relaunch_launcher():
         new_window.media_player.setSource(QUrl.fromLocalFile(video_path))
         if hasattr(new_window, "refresh_video_dimensions"):
             new_window.refresh_video_dimensions(video_path)
-        new_window.current_project_state = new_window.ensure_current_project()
+        if project_file and os.path.isfile(project_file):
+            new_window.current_project_state = new_window.project_service.load_project(project_file)
+        else:
+            new_window.current_project_state = None
+            new_window.current_project_state = new_window.ensure_current_project()
         new_window.load_project_context(new_window.current_project_state)
+        if new_window.current_project_state:
+            LauncherWindow.add_recent(
+                None,
+                video_path,
+                project_id=new_window.current_project_state.project_id,
+                project_name=new_window.current_project_state.project_name,
+                project_dir=new_window.current_project_state.project_root,
+            )
         if hasattr(new_window, "timeline") and hasattr(new_window.timeline, "set_video_source"):
             try:
                 dur = new_window.media_player.duration() / 1000.0

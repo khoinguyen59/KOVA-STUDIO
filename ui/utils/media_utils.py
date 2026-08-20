@@ -344,8 +344,19 @@ def browse_video(gui):
     gui.current_segment_models = []
     gui.current_translated_segment_models = []
 
+    # Reset current_project_state to None to guarantee a fresh, isolated project is created
+    gui.current_project_state = None
     gui.current_project_state = gui.ensure_current_project()
     gui.load_project_context(gui.current_project_state)
+    if gui.current_project_state:
+        from views.launcher import LauncherWindow
+        LauncherWindow.add_recent(
+            getattr(gui, "settings", None),
+            file_path,
+            project_id=gui.current_project_state.project_id,
+            project_name=gui.current_project_state.project_name,
+            project_dir=gui.current_project_state.project_root,
+        )
 
     try:
         gui.media_player.pause()

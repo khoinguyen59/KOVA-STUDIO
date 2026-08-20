@@ -28,20 +28,77 @@ from runtime_paths import asset_path, subprocess_hidden_kwargs, workspace_root
 
 
 def _recent_projects_path():
-    # ``__file__`` lives inside ``_internal`` in a frozen build. Recent
-    # project data belongs beside the executable, not inside bundled assets.
     return os.path.join(workspace_root(), "recent_projects.json")
 
 
 def _load_recent_projects(settings=None):
     path = _recent_projects_path()
+    projects = []
     try:
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                projects = json.load(f)
+                if not isinstance(projects, list):
+                    projects = []
     except Exception:
-        pass
-    return []
+        projects = []
+
+    known_project_dirs = {os.path.normpath(str(p.get("project_dir", ""))) for p in projects if p.get("project_dir")}
+    projects_dir = os.path.join(workspace_root(), "projects")
+    if os.path.isdir(projects_dir):
+        try:
+            for entry in os.listdir(projects_dir):
+                proj_dir = os.path.join(projects_dir, entry)
+                proj_json = os.path.join(proj_dir, "project.json")
+                if os.path.isfile(proj_json):
+                    try:
+                        with open(proj_json, "r", encoding="utf-8") as pj:
+                            data = json.load(pj)
+                            v_path = str(data.get("input_video", "") or "").strip()
+                            p_name = str(data.get("project_name", "") or data.get("name", "")).strip()
+                            p_id = str(data.get("project_id", "") or entry).strip()
+                            norm_dir = os.path.normpath(proj_dir)
+                            if norm_dir not in known_project_dirs:
+                                mtime = int(os.path.getmtime(proj_json))
+                                if not p_name and v_path:
+                                    base = os.path.splitext(os.path.basename(v_path))[0]
+                                    created = str(data.get("created_at", "") or "")[:16].replace("T", " ")
+                                    p_name = f"{base} ({created})" if created else base
+                                projects.append({
+                                    "project_id": p_id,
+                                    "project_name": p_name,
+                                    "project_dir": norm_dir,
+                                    "video_path": os.path.normpath(v_path) if v_path else "",
+                                    "opened_at": mtime,
+                                })
+                                known_project_dirs.add(norm_dir)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # Filter out entries where video file doesn't exist
+    valid_projects = []
+    for p in projects:
+        p_dir = p.get("project_dir", "")
+        v_path = p.get("video_path", "")
+        if v_path and os.path.exists(v_path):
+            # Refresh project name from project.json if available
+            if p_dir and os.path.isdir(p_dir):
+                pj_path = os.path.join(p_dir, "project.json")
+                if os.path.isfile(pj_path):
+                    try:
+                        with open(pj_path, "r", encoding="utf-8") as pj:
+                            data = json.load(pj)
+                            name = str(data.get("project_name", "") or "").strip()
+                            if name:
+                                p["project_name"] = name
+                    except Exception:
+                        pass
+            valid_projects.append(p)
+
+    valid_projects.sort(key=lambda x: x.get("opened_at", 0), reverse=True)
+    return valid_projects
 
 
 def _save_recent_projects(settings, projects):
@@ -50,12 +107,18 @@ def _save_recent_projects(settings, projects):
         json.dump(projects, f, ensure_ascii=False, indent=2)
 
 
-def _project_pipeline_status(video_path: str) -> tuple[str, str]:
+def _project_pipeline_status(project_dir_or_video: str) -> tuple[str, str]:
     """Read the persisted project stage without creating or modifying it."""
-    name = os.path.splitext(os.path.basename(video_path))[0] or "project"
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower() or "project"
-    digest = hashlib.sha1(os.path.abspath(video_path).encode("utf-8")).hexdigest()[:8]
-    state_path = os.path.join(workspace_root(), "projects", f"{slug}_{digest}", "project.json")
+    state_path = ""
+    if os.path.isdir(project_dir_or_video):
+        state_path = os.path.join(project_dir_or_video, "project.json")
+    elif os.path.isfile(project_dir_or_video) and project_dir_or_video.endswith(".json"):
+        state_path = project_dir_or_video
+    else:
+        name = os.path.splitext(os.path.basename(project_dir_or_video))[0] or "project"
+        slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower() or "project"
+        digest = hashlib.sha1(os.path.abspath(project_dir_or_video).encode("utf-8")).hexdigest()[:8]
+        state_path = os.path.join(workspace_root(), "projects", f"{slug}_{digest}", "project.json")
     try:
         with open(os.path.normpath(state_path), "r", encoding="utf-8") as handle:
             state = json.load(handle)
@@ -124,35 +187,51 @@ MSG_STYLE = """
 
 
 class ProjectCard(QFrame):
-    def __init__(self, video_path: str, thumbnail_cache_dir: str, parent=None):
+    def __init__(self, proj_info, thumbnail_cache_dir: str, parent=None):
         super().__init__(parent)
-        self.video_path = video_path
+        if isinstance(proj_info, str):
+            self.video_path = proj_info
+            self.project_id = ""
+            self.project_dir = ""
+            self.project_name = os.path.basename(proj_info)
+        else:
+            self.video_path = str(proj_info.get("video_path", "") or "")
+            self.project_id = str(proj_info.get("project_id", "") or "")
+            self.project_dir = str(proj_info.get("project_dir", "") or "")
+            self.project_name = str(proj_info.get("project_name", "") or os.path.basename(self.video_path))
+        self.project_file = os.path.join(self.project_dir, "project.json") if self.project_dir else ""
         self._orig_pixmap = None
         self.setObjectName("statusCard")
-        self.setMinimumSize(180, 184)
+        self.setMinimumSize(180, 196)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet("ProjectCard:hover { border: 2px solid #4ecdc4; }")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setSpacing(5)
 
         self.thumb_label = QLabel()
-        self.thumb_label.setMinimumSize(160, 120)
+        self.thumb_label.setMinimumSize(160, 110)
         self.thumb_label.setAlignment(Qt.AlignCenter)
         self.thumb_label.setStyleSheet("background-color: #0d1220; border-radius: 6px;")
         self.thumb_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
         layout.addWidget(self.thumb_label)
 
-        self.name_label = QLabel(os.path.basename(video_path))
+        self.name_label = QLabel(self.project_name)
         self.name_label.setWordWrap(True)
         self.name_label.setMaximumHeight(36)
-        self.name_label.setStyleSheet("color: #e0e0e0; font-size: 11px; font-weight: 600;")
+        self.name_label.setStyleSheet("color: #ffffff; font-size: 11px; font-weight: 700;")
         layout.addWidget(self.name_label)
 
-        stage_text, stage_color = _project_pipeline_status(video_path)
+        video_sub = os.path.basename(self.video_path) if self.video_path else ""
+        if video_sub and video_sub != self.project_name:
+            self.sub_label = QLabel(f"File: {video_sub}")
+            self.sub_label.setStyleSheet("color: #7d93ac; font-size: 10px;")
+            self.sub_label.setMaximumHeight(16)
+            layout.addWidget(self.sub_label)
+
+        stage_text, stage_color = _project_pipeline_status(self.project_dir or self.video_path)
         self.stage_badge = QLabel(stage_text)
         self.stage_badge.setAlignment(Qt.AlignCenter)
         self.stage_badge.setStyleSheet(
@@ -178,7 +257,7 @@ class ProjectCard(QFrame):
             return
         w = self.thumb_label.width()
         if w > 0:
-            self.thumb_label.setPixmap(self._orig_pixmap.scaled(w, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.thumb_label.setPixmap(self._orig_pixmap.scaled(w, 110, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -189,6 +268,9 @@ class ProjectCard(QFrame):
             event.ignore()
             return
         self.window().selected_video = self.video_path
+        self.window().selected_project_file = self.project_file
+        self.window().selected_project_dir = self.project_dir
+        self.window().selected_project_id = self.project_id
         self.window().accept()
 
 
@@ -546,9 +628,27 @@ class LauncherWindow(QDialog):
         self.open_project_btn.clicked.connect(self._on_open_project_folder)
         action_row_two.insertWidget(0, self.open_project_btn)
 
+        self.colab_btn = QPushButton("⚡ Colab GPU")
+        self.colab_btn.setMinimumHeight(44)
+        self.colab_btn.setMinimumWidth(130)
+        self.colab_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1a304a;
+                color: #8ad7ff;
+                font-weight: 700;
+                font-size: 13px;
+                border-radius: 8px;
+                border: 1px solid #3d6a99;
+            }
+            QPushButton:hover { background-color: #24446a; border-color: #5bb2ff; color: #ffffff; }
+        """)
+        self.colab_btn.setToolTip("Cấu hình Colab / GPU từ xa hoặc AI Translation")
+        self.colab_btn.clicked.connect(self._on_colab_settings)
+        action_row_two.addWidget(self.colab_btn)
+
         self.about_btn = QPushButton("About / Help")
         self.about_btn.setMinimumHeight(44)
-        self.about_btn.setMinimumWidth(145)
+        self.about_btn.setMinimumWidth(125)
         self.about_btn.setStyleSheet("""
             QPushButton {
                 background-color: #22344d;
@@ -787,7 +887,7 @@ class LauncherWindow(QDialog):
 
         columns = min(3, max(1, (self.grid_widget.width() - 24) // 242))
         for i, proj in enumerate(existing):
-            card = ProjectCard(proj["video_path"], self._thumbnail_dir, self)
+            card = ProjectCard(proj, self._thumbnail_dir, self)
             row, col = divmod(i, max(1, columns))
             self.grid.addWidget(card, row, col)
             self.grid.setColumnStretch(col, 1)
@@ -804,6 +904,9 @@ class LauncherWindow(QDialog):
             )
             if path:
                 self.selected_video = path
+                self.selected_project_file = ""
+                self.selected_project_dir = ""
+                self.selected_project_id = ""
                 self.accept()
         except Exception as e:
             print(f"[Launcher] Error opening file dialog: {e}")
@@ -812,6 +915,21 @@ class LauncherWindow(QDialog):
         from views.resource_manager import open_resource_manager
         open_resource_manager(parent=self)
         self._validate_resources_for_device()
+
+    def _on_colab_settings(self):
+        try:
+            try:
+                from main_window import VideoTranslatorGUI
+            except ImportError:
+                from ui.main_window import VideoTranslatorGUI
+            temp_gui = VideoTranslatorGUI()
+            temp_gui.open_model_settings_dialog()
+            temp_gui.deleteLater()
+        except Exception as exc:
+            from PySide6.QtWidgets import QMessageBox
+            msg = QMessageBox(QMessageBox.Warning, "Colab Settings", f"Could not open settings:\n{exc}", QMessageBox.Ok, self)
+            msg.setStyleSheet(MSG_STYLE)
+            msg.exec()
 
     def _on_open_project_folder(self):
         from PySide6.QtWidgets import QMessageBox
@@ -1140,19 +1258,51 @@ class LauncherWindow(QDialog):
             self._gpu_label.setStyleSheet("font-size: 11px; color: #5a7a9a;")
 
     @staticmethod
-    def add_recent(settings_or_none, video_path: str):
-        video_path = os.path.normpath(video_path)
+    def add_recent(settings_or_none, video_path: str, project_id: str = "", project_name: str = "", project_dir: str = ""):
+        video_path = os.path.normpath(video_path) if video_path else ""
+        project_dir = os.path.normpath(project_dir) if project_dir else ""
         projects = _load_recent_projects()
         projects = [p for p in projects if os.path.exists(p.get("video_path", ""))]
-        existing = [p for p in projects if os.path.normpath(p.get("video_path", "")) == video_path]
+
+        # Match either by project_dir or project_id or video_path
+        existing = [
+            p for p in projects
+            if (project_dir and os.path.normpath(p.get("project_dir", "")) == project_dir)
+            or (project_id and p.get("project_id") == project_id)
+        ]
         if existing:
-            projects.remove(existing[0])
+            for ex in existing:
+                projects.remove(ex)
+                if not project_name:
+                    project_name = ex.get("project_name", "")
+
+        if not project_name and video_path:
+            base = os.path.splitext(os.path.basename(video_path))[0]
+            project_name = base
+
         projects.insert(0, {
+            "project_id": project_id,
+            "project_name": project_name,
+            "project_dir": project_dir,
             "video_path": video_path,
             "opened_at": int(time.time()),
         })
-        projects = projects[:12]
+        projects = projects[:16]
         _save_recent_projects(None, projects)
+
+    @staticmethod
+    def update_project_name(project_id: str, new_name: str, video_path: str = ""):
+        if not project_id and not video_path:
+            return
+        projects = _load_recent_projects()
+        updated = False
+        for p in projects:
+            if (project_id and p.get("project_id") == project_id) or (video_path and os.path.normpath(p.get("video_path", "")) == os.path.normpath(video_path)):
+                p["project_name"] = str(new_name or "").strip()
+                updated = True
+                break
+        if updated:
+            _save_recent_projects(None, projects)
 
 
 def _thumbnail_name(video_path: str) -> str:
@@ -1161,9 +1311,10 @@ def _thumbnail_name(video_path: str) -> str:
     return f"{h}.jpg"
 
 
-def show_launcher(settings_or_none) -> str:
-    """Show launcher, return selected video path or empty string."""
+def show_launcher(settings_or_none) -> tuple[str, str]:
+    """Show launcher, return (selected_video_path, selected_project_file)."""
     w = LauncherWindow()
     if w.exec() == QDialog.Accepted:
-        return w.selected_video
-    return ""
+        proj_file = getattr(w, "selected_project_file", "")
+        return w.selected_video, proj_file
+    return "", ""

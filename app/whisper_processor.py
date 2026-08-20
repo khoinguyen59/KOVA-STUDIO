@@ -1,4 +1,5 @@
 import os
+import os
 import shutil
 import subprocess
 import threading
@@ -14,6 +15,11 @@ _WHISPER_BATCHED_PIPELINE_CACHE: dict[int, object] = {}
 _WHISPER_MODEL_LOCK = threading.Lock()
 _WHISPER_TRANSCRIBE_LOCK = threading.Lock()
 _OPENMP_WORKAROUND_APPLIED = False
+
+
+def _gpu_required() -> bool:
+    """Whether this runtime must reject every Whisper CPU fallback."""
+    return str(os.getenv("CAPCAP_REQUIRE_GPU", "") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 
@@ -265,6 +271,8 @@ def _load_whisper_model(model_name):
         ) from exc
 
     runtime = _detect_faster_whisper_runtime()
+    if _gpu_required() and runtime["device"] != "cuda":
+        raise RuntimeError("CapCap requires a CUDA GPU for Whisper in this runtime; start a GPU-enabled Colab session.")
     model_kwargs = {
         "device": runtime["device"],
         "compute_type": runtime["compute_type"],
@@ -308,6 +316,10 @@ def _load_whisper_model(model_name):
             return model
         except Exception as exc:
             if runtime["device"] == "cuda":
+                if _gpu_required():
+                    raise RuntimeError(
+                        f"CapCap requires CUDA Whisper and will not fall back to CPU: {exc}"
+                    ) from exc
                 fallback_kwargs = {
                     "device": "cpu",
                     "compute_type": "int8",
@@ -518,6 +530,10 @@ def transcribe_audio(audio_path, model_path, whisper_path=None, language="auto",
     except RuntimeError as exc:
         message = str(exc)
         if "cublas64_12.dll" in message or "cannot be loaded" in message:
+            if _gpu_required():
+                raise RuntimeError(
+                    f"CapCap requires CUDA Whisper and will not fall back to CPU: {message}"
+                ) from exc
             print(f"[Whisper] CUDA runtime mismatch detected, falling back to CPU: {message}")
             cpu_kwargs = {
                 "device": "cpu",

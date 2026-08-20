@@ -81,6 +81,8 @@ class SubtitleController:
         if not audio_src or not os.path.exists(audio_src):
             QMessageBox.warning(self.gui, "Error", "Audio source file not found! Please extract audio first.")
             return
+        if not self.gui.ensure_colab_connection("Transcription", ("transcribe",)):
+            return
 
         model_path = self.gui.get_whisper_model_path()
         lang = self.gui.get_source_language_code()

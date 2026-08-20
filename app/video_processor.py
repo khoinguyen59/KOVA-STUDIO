@@ -130,7 +130,7 @@ def _escape_path_for_filter(path):
 def _ass_filter_expression(ass_path: str) -> str:
     """Build an ASS filter that uses the same local font collection as Qt."""
     escaped_ass = _escape_path_for_filter(ass_path)
-    bundled_fonts = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "assets", "fonts"))
+    bundled_fonts = asset_path("fonts")
     if os.path.isdir(bundled_fonts) and any(name.lower().endswith((".ttf", ".otf")) for name in os.listdir(bundled_fonts)):
         escaped_fonts = _escape_path_for_filter(bundled_fonts)
         return f"ass=filename='{escaped_ass}':fontsdir='{escaped_fonts}'"

@@ -6,11 +6,18 @@ import json
 import os
 import tempfile
 import traceback
+import shutil
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 
-os.environ.setdefault("CAPCAP_RUNTIME_PROFILE", "local")
+# A remote API server executes the workload itself.  It must never inherit
+# the desktop client's ``remote`` profile, otherwise EngineRuntime selects
+# remote adapters and calls this same server recursively while its GPU lock is
+# held.  Keep the server process local to its own runtime (Colab GPU or the
+# explicitly started local worker) and discard the client's remote URL.
+os.environ["CAPCAP_RUNTIME_PROFILE"] = "local"
+os.environ.pop("CAPCAP_REMOTE_API_URL", None)
 
 _QUIET = os.getenv("CAPCAP_QUIET", "").strip().lower() in ("1", "true", "yes")
 _GPU_LOCK = threading.Lock()
@@ -80,6 +87,13 @@ class CapCapRemoteHandler(BaseHTTPRequestHandler):
                         "ok": True,
                         "service": "capcap-remote-api",
                         "profile": os.getenv("CAPCAP_RUNTIME_PROFILE", "local"),
+                        "capabilities": [
+                            "transcribe",
+                            "translate",
+                            "rewrite",
+                            "tts",
+                            "separate_vocals",
+                        ],
                     },
                 )
                 return
@@ -123,6 +137,10 @@ class CapCapRemoteHandler(BaseHTTPRequestHandler):
                 with _GPU_LOCK:
                     _json_response(self, 200, self._handle_tts_synthesize(payload))
                 return
+            if self.path == "/v1/separate-vocals":
+                with _GPU_LOCK:
+                    _json_response(self, 200, self._handle_separate_vocals(payload))
+                return
             if self.path == "/v1/prepare":
                 with _GPU_LOCK:
                     _json_response(self, 200, self._handle_prepare(payload))
@@ -160,7 +178,7 @@ class CapCapRemoteHandler(BaseHTTPRequestHandler):
         _log(f"[Remote API] {self.address_string()} - {format % args}")
 
     def _check_auth(self) -> None:
-        expected = remote_api_token()
+        expected = str(os.getenv("CAPCAP_LOCAL_IPC_TOKEN", "") or remote_api_token()).strip()
         if not expected:
             return
         supplied = str(self.headers.get("X-CapCap-Token", "") or "").strip()
@@ -272,6 +290,50 @@ class CapCapRemoteHandler(BaseHTTPRequestHandler):
                 os.remove(temp_wav_path)
             except Exception:
                 pass
+
+    def _handle_separate_vocals(self, payload: dict) -> dict:
+        """Run vocal separation on this server and return both WAV stems.
+
+        The desktop client sends only extracted audio; all ONNX inference is
+        performed on the Colab server.  Temporary data is removed before the
+        request completes so audio from a client session is never retained.
+        """
+        audio_b64 = str(payload.get("audio_b64", "") or "").strip()
+        if not audio_b64:
+            raise ValueError("audio_b64 is required.")
+        try:
+            audio_bytes = base64.b64decode(audio_b64.encode("ascii"), validate=True)
+        except Exception as exc:
+            raise ValueError("audio_b64 is not valid base64 audio data.") from exc
+        if not audio_bytes:
+            raise ValueError("audio_b64 decoded to an empty audio file.")
+
+        filename = os.path.basename(str(payload.get("audio_filename", "remote_input.wav") or "remote_input.wav"))
+        suffix = os.path.splitext(filename)[1].lower()
+        if not suffix or len(suffix) > 12:
+            suffix = ".wav"
+        request_dir = tempfile.mkdtemp(prefix="capcap_remote_separation_", dir=tempfile.gettempdir())
+        input_path = os.path.join(request_dir, f"input{suffix}")
+        output_dir = os.path.join(request_dir, "stems")
+        try:
+            with open(input_path, "wb") as handle:
+                handle.write(audio_bytes)
+            from vocal_processor import separate_vocals
+
+            vocals_path, background_path = separate_vocals(input_path, output_dir)
+            if not vocals_path or not background_path:
+                raise RuntimeError("Vocal separation did not produce both output stems.")
+            with open(vocals_path, "rb") as handle:
+                vocals_b64 = base64.b64encode(handle.read()).decode("ascii")
+            with open(background_path, "rb") as handle:
+                background_b64 = base64.b64encode(handle.read()).decode("ascii")
+            return {
+                "ok": True,
+                "vocals_b64": vocals_b64,
+                "background_b64": background_b64,
+            }
+        finally:
+            shutil.rmtree(request_dir, ignore_errors=True)
 
     def _handle_prepare(self, payload: dict) -> dict:
         video_path = str(payload.get("video_path", "") or "").strip()

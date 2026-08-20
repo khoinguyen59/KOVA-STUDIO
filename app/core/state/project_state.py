@@ -27,6 +27,7 @@ class ProjectState:
     project_id: str
     project_root: str
     input_video: str
+    project_name: str = ""
     input_language: str = "auto"
     target_language: str = "vi"
     mode: str = "subtitle"
@@ -46,6 +47,7 @@ class ProjectState:
             project_id=str(data.get("project_id", "")),
             project_root=str(data.get("project_root", "")),
             input_video=str(data.get("input_video", "")),
+            project_name=str(data.get("project_name") or data.get("name") or "").strip(),
             input_language=str(data.get("input_language", "auto") or "auto"),
             target_language=str(data.get("target_language", "vi") or "vi"),
             mode=str(data.get("mode", "subtitle") or "subtitle"),
@@ -54,12 +56,22 @@ class ProjectState:
             steps=steps,
             settings=dict(data.get("settings", {}) or {}),
             artifacts=dict(data.get("artifacts", {}) or {}),
-            created_at=str(data.get("created_at", data.get("created_at", _utc_now_iso()))),
-            updated_at=str(data.get("updated_at", data.get("updated_at", _utc_now_iso()))),
+            created_at=str(data.get("created_at", _utc_now_iso())),
+            updated_at=str(data.get("updated_at", _utc_now_iso())),
         )
 
     def touch(self) -> None:
         self.updated_at = _utc_now_iso()
+
+    def set_name(self, name: str) -> None:
+        self.project_name = str(name or "").strip()
+        self.touch()
+
+    def display_name(self) -> str:
+        if self.project_name:
+            return self.project_name
+        base = os.path.splitext(os.path.basename(self.input_video or "Project"))[0] or "Project"
+        return f"{base} ({self.created_at[:16].replace('T', ' ')})"
 
     def set_step_status(self, step_name: str, status: str) -> None:
         self.steps[step_name] = status
@@ -76,6 +88,7 @@ class ProjectState:
     def to_dict(self) -> dict[str, Any]:
         return {
             "project_id": self.project_id,
+            "project_name": self.project_name,
             "project_root": self.project_root,
             "input_video": self.input_video,
             "input_language": self.input_language,

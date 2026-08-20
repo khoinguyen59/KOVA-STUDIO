@@ -16,9 +16,11 @@ _datas_raw = [
     (project_root / "app" / "voice_preview_catalog.json", "app"),
     (project_root / "app" / "voice_download_catalog.json", "app"),
     (project_root / "app" / "voice_preview_catalog.release.json", "app"),
-    (project_root / "app" / "utils" / "voice_preview_utils.py", "utils"),
+    (project_root / "app" / "utils", "app/utils"),
+    (project_root / "app" / "utils", "utils"),
     (project_root / ".env_example", "."),
     (project_root / "ui" / "views" / "editor", "views/editor"),
+    (project_root / "ui" / "views" / "editor", "ui/views/editor"),
     (project_root / "colab", "colab"),
 ]
 
@@ -87,6 +89,7 @@ a = Analysis(
         "engines.remote_whisper_adapter",
         "engines.remote_translator_adapter",
         "engines.remote_tts_adapter",
+        "engines.remote_vocal_adapter",
         # Lazy-loaded translation providers
         "translation.providers.ai_polisher",
         "translation.providers.gemini_polisher",
@@ -96,19 +99,11 @@ a = Analysis(
         "workflows.voice_workflow",
         "workflows.export_workflow",
         # Required for voice workflow
+        "app.utils.voice_preview_utils",
         "utils.voice_preview_utils",
         # Required for timeline + audio
         "pydub",
-        "scipy",
-        "librosa",
-        "soundfile",
-        "onnxruntime",
-        "openai",
-        "audio_mixer",
-        "vocal_processor",
-        "whisper_processor",
-        "faster_whisper",
-        "ctranslate2",
+        "aiohttp",
         "edge_tts",
         "dotenv",
         "huggingface_hub",
@@ -166,8 +161,9 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    [],
-    exclude_binaries=True,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     name="CapCap",
     debug=False,
     bootloader_ignore_signals=False,
@@ -177,15 +173,4 @@ exe = EXE(
     console=False,
     icon=str(project_root / "assets" / "capcap.ico"),
     disable_windowed_traceback=False,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_dir=str(project_root / "upx"),
-    upx_exclude=["onnxruntime*", "ffmpeg*", "ffprobe*", "mpv*", "cudnn*", "cublas*", "cudart*", "libomp*"],
-    name="CapCap",
 )

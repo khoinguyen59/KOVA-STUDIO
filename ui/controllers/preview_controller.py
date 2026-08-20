@@ -1,4 +1,4 @@
-﻿import os
+import os
 import hashlib
 import json
 import re
@@ -690,25 +690,25 @@ class PreviewController:
         
         Returns the path to the newly generated mixed audio file, or empty string if failed.
         """
-        if not hasattr(self.gui, 'last_voice_vi_path') or not self.gui.last_voice_vi_path:
-            print("[Export] No voice file path available")
+        voice_path = self.gui._resolve_preview_voice_only_audio_path() if hasattr(self.gui, '_resolve_preview_voice_only_audio_path') else getattr(self.gui, 'last_voice_vi_path', '')
+        if not voice_path or not os.path.exists(voice_path):
+            print(f"[Export] Voice file not found: {voice_path}")
             return ""
         
-        voice_path = self.gui.last_voice_vi_path
-        if not os.path.exists(voice_path):
-            print(f"[Export] Voice file not found at: {voice_path}")
-            return ""
-        
-        # Get current volume settings from Audio tab
+        # Get current volume settings from Audio tab and check mute states
         original_volume = int(self.gui.audio_a1_volume_slider.value()) if hasattr(self.gui, 'audio_a1_volume_slider') else 50
         dub_volume = int(self.gui.audio_a2_volume_slider.value()) if hasattr(self.gui, 'audio_a2_volume_slider') else 100
-        
+        if getattr(self.gui, "_mute_original", False):
+            original_volume = 0
+        if getattr(self.gui, "_mute_dubbed", False):
+            dub_volume = 0
+
         # Get background audio path
         bg_path = self.gui._resolve_preview_background_audio_path() if hasattr(self.gui, '_resolve_preview_background_audio_path') else ""
         
-        if not bg_path or not os.path.exists(bg_path):
-            # No background, just use voice with dub volume
-            print(f"[Export] No background audio, using voice only: {voice_path}")
+        if not bg_path or not os.path.exists(bg_path) or original_volume == 0:
+            # If A1 audio is muted or original volume is 0, export pure TTS voice
+            print(f"[Export] Using pure voice (original audio muted/disabled): {voice_path}")
             return voice_path
         
         # Generate new mixed audio with current volumes
@@ -777,7 +777,7 @@ class PreviewController:
         generate_srt(segments, out_path)
         self.gui.last_translated_srt_path = out_path
         self.gui.processed_artifacts["srt_translated"] = out_path
-        self.gui.persist_translation_project_data(self.gui.current_translated_segments, out_path)
+        self.gui.persist_translation_project_data(segments, out_path)
         return out_path
 
     def _file_signature(self, path: str) -> dict:
@@ -833,23 +833,29 @@ class PreviewController:
         mode = str(requested_mode or "both").strip().lower()
         if mode not in {"voice", "both"}:
             return mode
-        has_translated_subtitles = bool(
+        has_subtitles = bool(
             getattr(self.gui, "current_translated_segments", None)
+            or getattr(self.gui, "current_segments", None)
             or str(self.gui.translated_text.toPlainText() if hasattr(self.gui, "translated_text") else "").strip()
+            or str(self.gui.transcript_text.toPlainText() if hasattr(self.gui, "transcript_text") else "").strip()
             or (
                 getattr(self.gui, "last_translated_srt_path", "")
                 and os.path.exists(str(self.gui.last_translated_srt_path))
             )
+            or (
+                getattr(self.gui, "last_original_srt_path", "")
+                and os.path.exists(str(self.gui.last_original_srt_path))
+            )
         )
         project_state = getattr(self.gui, "current_project_state", None)
-        if has_translated_subtitles and bool(
+        if has_subtitles and bool(
             project_state and project_state.settings.get("tts_skipped", False)
         ):
-            self.gui.log("[Export] TTS was skipped; exporting translated subtitles with original audio.")
+            self.gui.log("[Export] TTS was skipped; exporting subtitles with original audio.")
             return "subtitle"
         audio_path = self.gui.resolve_selected_audio_path()
-        if has_translated_subtitles and not (audio_path and os.path.exists(audio_path)):
-            self.gui.log("[Export] No TTS audio selected; exporting translated subtitles with original audio.")
+        if has_subtitles and not (audio_path and os.path.exists(audio_path)):
+            self.gui.log("[Export] No TTS audio selected; exporting subtitles with original audio.")
             return "subtitle"
         return mode
 

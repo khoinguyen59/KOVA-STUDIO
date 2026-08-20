@@ -439,17 +439,34 @@ def synthesize_text_to_wav_16k_mono(
     if provider == "piper":
         # Use Piper TTS with local model
         model_path = _resolve_piper_model_path(provider_voice)
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Piper model not found at {model_path}. Please download and place the model there.")
-        
-        return piper_tts_to_wav_16k_mono(
+        if os.path.exists(model_path):
+            try:
+                return piper_tts_to_wav_16k_mono(
+                    text=text,
+                    wav_path=wav_path,
+                    model_path=model_path,
+                    language=str(voice_entry.get("language", "vi") or "vi"),
+                    speed=speed,
+                    tmp_dir=tmp_dir,
+                    on_progress=on_progress,
+                )
+            except Exception as exc:
+                if on_progress:
+                    on_progress(f"[Piper Error] {exc}. Falling back to EdgeTTS...")
+        else:
+            if on_progress:
+                on_progress(f"[Piper Notice] Model not found at {model_path}. Using online EdgeTTS fallback...")
+
+        # Fallback to EdgeTTS
+        speed_value = _speed_to_float(speed)
+        edge_rate_percent = int(round((speed_value - 1.0) * 100.0))
+        edge_rate = f"{edge_rate_percent:+d}%"
+        return edge_tts_to_wav_16k_mono(
             text=text,
             wav_path=wav_path,
-            model_path=model_path,
-            language=str(voice_entry.get("language", "vi") or "vi"),
-            speed=speed,
+            voice="vi-VN-HoaiMyNeural",
+            rate=edge_rate,
             tmp_dir=tmp_dir,
-            on_progress=on_progress,
         )
     elif provider == "edge":
         # Use Edge TTS
@@ -464,5 +481,15 @@ def synthesize_text_to_wav_16k_mono(
             tmp_dir=tmp_dir,
         )
     else:
-        raise ValueError(f"Unsupported TTS provider: {provider}. Only 'piper' and 'edge' are supported.")
+        # Fallback to default EdgeTTS
+        speed_value = _speed_to_float(speed)
+        edge_rate_percent = int(round((speed_value - 1.0) * 100.0))
+        edge_rate = f"{edge_rate_percent:+d}%"
+        return edge_tts_to_wav_16k_mono(
+            text=text,
+            wav_path=wav_path,
+            voice="vi-VN-HoaiMyNeural",
+            rate=edge_rate,
+            tmp_dir=tmp_dir,
+        )
 

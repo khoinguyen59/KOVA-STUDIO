@@ -44,14 +44,11 @@ def remote_api_post(path: str, payload: dict, *, timeout: int | None = None, ret
                 timeout=timeout or remote_api_timeout_seconds(),
             )
             if not response.ok:
-                # ``raise_for_status`` loses the JSON body returned by the
-                # local worker, leaving packaged builds to show only a vague
-                # HTTP 500 URL. Preserve the server's actual root cause.
                 detail = ""
                 try:
                     error_payload = response.json()
                     if isinstance(error_payload, dict):
-                        detail = str(error_payload.get("error") or "").strip()
+                        detail = str(error_payload.get("error") or error_payload.get("detail") or error_payload.get("message") or "").strip()
                 except (ValueError, TypeError):
                     pass
                 if not detail:
@@ -59,7 +56,7 @@ def remote_api_post(path: str, payload: dict, *, timeout: int | None = None, ret
                 endpoint = str(path or "/")
                 if detail:
                     raise RuntimeError(
-                        f"Local worker {endpoint} failed ({response.status_code}): {detail}"
+                        f"Remote Colab {endpoint} failed ({response.status_code}): {detail}"
                     )
                 response.raise_for_status()
             data = response.json()

@@ -7,18 +7,41 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from services import EngineRuntime, ProjectService
 
-# Force-load from app/utils/ (ui/utils/ may shadow it)
-_vpu_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "utils", "voice_preview_utils.py")
-_vpu_spec = importlib.util.spec_from_file_location("capcap_voice_preview_utils", _vpu_path)
-_vpu = importlib.util.module_from_spec(_vpu_spec)
-_vpu_spec.loader.exec_module(_vpu)
-clamp_requested_speed = _vpu.clamp_requested_speed
-load_manifest = _vpu.load_manifest
-manifest_path = _vpu.manifest_path
-provider_native_speed = _vpu.provider_native_speed
-save_manifest = _vpu.save_manifest
-segment_cache_key = _vpu.segment_cache_key
-voice_provider = _vpu.voice_provider
+try:
+    from utils.voice_preview_utils import (
+        clamp_requested_speed,
+        load_manifest,
+        manifest_path,
+        provider_native_speed,
+        save_manifest,
+        segment_cache_key,
+        voice_provider,
+    )
+except ImportError:
+    try:
+        from app.utils.voice_preview_utils import (
+            clamp_requested_speed,
+            load_manifest,
+            manifest_path,
+            provider_native_speed,
+            save_manifest,
+            segment_cache_key,
+            voice_provider,
+        )
+    except ImportError:
+        _vpu_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "utils", "voice_preview_utils.py")
+        if os.path.exists(_vpu_path):
+            _vpu_spec = importlib.util.spec_from_file_location("capcap_voice_preview_utils", _vpu_path)
+            if _vpu_spec and _vpu_spec.loader:
+                _vpu = importlib.util.module_from_spec(_vpu_spec)
+                _vpu_spec.loader.exec_module(_vpu)
+                clamp_requested_speed = _vpu.clamp_requested_speed
+                load_manifest = _vpu.load_manifest
+                manifest_path = _vpu.manifest_path
+                provider_native_speed = _vpu.provider_native_speed
+                save_manifest = _vpu.save_manifest
+                segment_cache_key = _vpu.segment_cache_key
+                voice_provider = _vpu.voice_provider
 
 
 def predict_speed_ratios(segments):
@@ -1566,10 +1589,17 @@ class VoiceWorkflow:
                             float(segments[idx].get("end", 0.0)) - float(segments[idx].get("start", 0.0)),
                         )
                         self._write_silence_wav(seg_wav, target_duration)
-                        print(
-                            f"[Voice Workflow] TTS failed at subtitle segment {idx + 1}: "
-                            f"\"{preview}\". Using silence placeholder. Error: {exc}"
-                        )
+                        try:
+                            print(
+                                f"[Voice Workflow] TTS failed at subtitle segment {idx + 1}: "
+                                f"\"{preview}\". Using silence placeholder. Error: {exc}"
+                            )
+                        except Exception:
+                            safe_preview = preview.encode("ascii", "replace").decode("ascii")
+                            print(
+                                f"[Voice Workflow] TTS failed at subtitle segment {idx + 1}: "
+                                f"\"{safe_preview}\". Using silence placeholder. Error: {exc}"
+                            )
                     manifest_segments[str(job["global_idx"])] = {
                         "cache_key": str(job["cache_key"]),
                         "wav_path": seg_wav,

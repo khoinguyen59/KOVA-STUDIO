@@ -8,10 +8,10 @@ REMOTE_PROFILE = "remote"
 
 
 def current_runtime_profile() -> str:
-    profile = str(os.getenv("CAPCAP_RUNTIME_PROFILE", LOCAL_PROFILE) or LOCAL_PROFILE).strip().lower()
-    if profile == REMOTE_PROFILE:
-        return REMOTE_PROFILE
-    return LOCAL_PROFILE
+    profile = str(os.getenv("CAPCAP_RUNTIME_PROFILE", REMOTE_PROFILE) or REMOTE_PROFILE).strip().lower()
+    if profile == LOCAL_PROFILE:
+        return LOCAL_PROFILE
+    return REMOTE_PROFILE
 
 
 def is_remote_profile() -> bool:

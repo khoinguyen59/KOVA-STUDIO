@@ -137,10 +137,12 @@ class PipelineController:
         port = self._find_free_local_port()
         token = secrets.token_urlsafe(24)
         env = os.environ.copy()
-        env["CAPCAP_RUNTIME_PROFILE"] = "local"
+        env["CAPCAP_RUNTIME_PROFILE"] = os.getenv("CAPCAP_RUNTIME_PROFILE", "local")
+        env["CAPCAP_REMOTE_API_URL"] = os.getenv("CAPCAP_REMOTE_API_URL", "")
+        env["CAPCAP_REMOTE_API_TOKEN"] = os.getenv("CAPCAP_REMOTE_API_TOKEN", "")
+        env["CAPCAP_LOCAL_IPC_TOKEN"] = token
         env["CAPCAP_REMOTE_API_HOST"] = "127.0.0.1"
         env["CAPCAP_REMOTE_API_PORT"] = str(port)
-        env["CAPCAP_REMOTE_API_TOKEN"] = token
         env["CAPCAP_REMOTE_PRELOAD_MODELS"] = "0"
         env["CAPCAP_RUN_REMOTE_API_SERVER"] = "1" if getattr(sys, "frozen", False) else "0"
         env["CAPCAP_DEVICE"] = (
@@ -316,6 +318,19 @@ class PipelineController:
         if requires_separation is None:
             requires_separation = (self.gui.get_audio_handling_mode() == "clean")
 
+        requested_stage = str(target_stage or "full").strip().lower()
+        required_capabilities = ["transcribe"]
+        if requested_stage != "transcript":
+            required_capabilities.append("translate")
+        if requires_separation:
+            required_capabilities.append("separate_vocals")
+        if requested_stage == "full" and self.gui.get_output_mode_key() in ("voice", "both"):
+            required_capabilities.append("tts")
+        if not self.gui.ensure_colab_connection("Generate", required_capabilities):
+            return
+
+        from runtime_profile import is_remote_profile
+
         # Initialize state
         self.prepare_run_id += 1
         prepare_run_id = self.prepare_run_id
@@ -333,19 +348,23 @@ class PipelineController:
 
         # Start the background worker
         self.gui.log(f"[Pipeline] Starting prepare workflow for: {video_path}")
-        try:
-            self.active_processing_device = (
-                "cuda" if os.getenv("CAPCAP_DEVICE", "cpu").strip().lower() == "cuda" else "cpu"
-            )
-            self._start_local_worker_server(self.active_processing_device)
-            self.gui.log(
-                f"[Pipeline] Local worker process started at {self.local_worker_api_url} "
-                f"(device={self.active_processing_device})"
-            )
-        except Exception as exc:
-            self.pipeline_fail(f"Could not start local worker process: {exc}")
+        target_remote_url = os.getenv("CAPCAP_REMOTE_API_URL", "").strip()
+        target_remote_token = os.getenv("CAPCAP_REMOTE_API_TOKEN", "").strip()
+
+        if not (is_remote_profile() and target_remote_url and target_remote_url != "http://127.0.0.1:8765"):
+            self.pipeline_fail("A live Colab GPU connection is required before starting the pipeline.")
             return
+
+        # Desktop processing is intentionally remote-only.  Do not revive the
+        # legacy local worker fallback here: it could run Whisper/Demucs/TTS on
+        # the user's CPU after an expired Colab session.
+        self.gui.log(f"[Pipeline] Chạy toàn bộ AI Pipeline trực tiếp trên máy chủ Colab GPU: {target_remote_url}")
+        actual_remote_url = target_remote_url
+        actual_remote_token = target_remote_token
+        self.local_worker_api_url = target_remote_url
+        self.local_worker_api_token = target_remote_token
         self._start_prepare_status_polling()
+
         transcription_engine = self.gui.get_transcription_engine()
         # Transcript-only is a true stop point: PrepareWorkflow still
         # extracts audio and transcribes, but does not call translation.
@@ -372,8 +391,8 @@ class PipelineController:
             skip_translation=skip_translation,
             prefetch_voice_name=self.gui.get_active_voice_name() if prefetch_tts else "",
             prefetch_voice_speed=self.gui._parse_voice_speed_value() if prefetch_tts else 1.0,
-            remote_api_url=self.local_worker_api_url,
-            remote_api_token=self.local_worker_api_token,
+            remote_api_url=actual_remote_url,
+            remote_api_token=actual_remote_token,
             force_remote_api=True,
         )
         
