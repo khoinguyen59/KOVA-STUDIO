@@ -3,7 +3,7 @@
 from pathlib import Path
 import os
 import glob as _glob
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 project_root = Path(SPECPATH)
 ui_root = project_root / "ui"
@@ -26,6 +26,23 @@ _datas_raw = [
 
 datas = [(str(src), dst) for src, dst in _datas_raw if src.exists()]
 rapidocr_hiddenimports = []
+
+# NumPy is imported lazily by the timeline waveform worker.  Import it at
+# build-time so a broken build environment fails immediately, then include both
+# extension modules and the OpenBLAS runtime located in the wheel's sibling
+# ``numpy.libs`` directory.  Without these DLLs the generated EXE logs a
+# numpy._core._multiarray_umath DLL-load error at runtime.
+import numpy as _numpy
+
+_numpy_package_root = Path(_numpy.__file__).resolve().parent
+_numpy_runtime_root = _numpy_package_root.parent / "numpy.libs"
+numpy_binaries = collect_dynamic_libs("numpy")
+if _numpy_runtime_root.is_dir():
+    numpy_binaries.extend(
+        (str(path), "numpy.libs")
+        for path in sorted(_numpy_runtime_root.glob("*.dll"))
+    )
+numpy_binaries = list(dict.fromkeys(numpy_binaries))
 
 excludes = [
     "torch",
@@ -50,7 +67,7 @@ excludes = [
 a = Analysis(
     [str(ui_root / "gui.py")],
     pathex=[str(project_root), str(ui_root), str(app_root)],
-    binaries=[],
+    binaries=numpy_binaries,
     datas=datas,
     hiddenimports=[
         "gui",
@@ -103,6 +120,7 @@ a = Analysis(
         "utils.voice_preview_utils",
         # Required for timeline + audio
         "pydub",
+        "numpy",
         "aiohttp",
         "edge_tts",
         "dotenv",

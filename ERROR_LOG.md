@@ -226,3 +226,12 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Nguyên nhân gốc rễ (Root Cause):** EXE one-file của PyInstaller chạy theo parent bootloader và child GUI. `process.terminate()` chỉ đóng parent, để child giữ mutex `CapCap.SingleInstance`.
 * **Cách xử lý (Fix Details):** Smoke test trên Windows dùng `taskkill /T /F` trên parent PID để kết thúc trọn cây tiến trình trước khi trả về.
 * **File liên quan:** [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
+
+---
+
+### 20. Ứng dụng văng Qt6Core sau khi hoàn tất pipeline hoặc tạo waveform
+* **Thời gian:** 20/08/2026
+* **Mô tả hiện tượng:** Sau khi Colab đã bóc băng thành công, ứng dụng có thể đóng đột ngột. Windows Event Viewer ghi lỗi `Qt6Core.dll`, mã `0xc0000409` (BEX64). Đồng thời log runtime báo `numpy._core._multiarray_umath` không tải được DLL khi tạo waveform trên Timeline.
+* **Nguyên nhân gốc rễ (Root Cause):** Nhiều lớp `QThread` khai báo Signal kết quả tên `finished`, che khuất Signal vòng đời gốc `QThread.finished`. Callback kết quả sau đó giải phóng tham chiếu worker trước khi native thread thực sự kết thúc, dẫn tới lỗi bộ nhớ trong Qt. Môi trường build cũng có NumPy hỏng/thiếu DLL OpenBLAS, nên EXE không thể nạp NumPy cho waveform.
+* **Cách xử lý (Fix Details):** Đổi toàn bộ Signal kết quả của worker sang `result_ready`; chỉ dùng `QThread.finished` gốc để giữ tham chiếu và hủy worker sau khi thread dừng. Bổ sung đóng gói bắt buộc các DLL NumPy/`numpy.libs` và kiểm tra import NumPy ngay khi build. Thêm test tự động kiểm tra không được che khuất `QThread.finished` và chạy worker waveform tối giản đến khi native thread kết thúc.
+* **File liên quan:** [`ui/worker_adapters/processing_workers.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/worker_adapters/processing_workers.py), [`ui/worker_adapters/preview_workers.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/worker_adapters/preview_workers.py), [`ui/main_window.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/main_window.py), [`ui/controllers/pipeline_controller.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/controllers/pipeline_controller.py), [`ui/controllers/preview_controller.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/controllers/preview_controller.py), [`ui/controllers/subtitle_controller.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/controllers/subtitle_controller.py), [`CapCap.spec`](file:///C:/NTKhoi/Downloads/CAPCAP/CapCap.spec), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).

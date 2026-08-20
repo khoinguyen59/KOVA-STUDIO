@@ -18,7 +18,7 @@ from services import EngineRuntime, ResourceDownloadService
 
 
 class VocalSeparationWorker(QThread):
-    finished = Signal(str, str, str)
+    result_ready = Signal(str, str, str)
 
     def __init__(self, audio_path, output_dir):
         super().__init__()
@@ -30,17 +30,17 @@ class VocalSeparationWorker(QThread):
             engine = EngineRuntime()
             vocal_path, music_path = engine.separate_vocals(self.audio_path, self.output_dir)
             if vocal_path and music_path:
-                self.finished.emit(vocal_path, music_path, "")
+                self.result_ready.emit(vocal_path, music_path, "")
             else:
-                self.finished.emit("", "", "Failed to separate audio stems.")
+                self.result_ready.emit("", "", "Failed to separate audio stems.")
         except ImportError as exc:
-            self.finished.emit("", "", str(exc))
+            self.result_ready.emit("", "", str(exc))
         except Exception as exc:
-            self.finished.emit("", "", f"Unexpected error: {str(exc)}")
+            self.result_ready.emit("", "", f"Unexpected error: {str(exc)}")
 
 
 class ExtractionWorker(QThread):
-    finished = Signal(bool, str)
+    result_ready = Signal(bool, str)
 
     def __init__(self, video_path, audio_output_path):
         super().__init__()
@@ -51,13 +51,13 @@ class ExtractionWorker(QThread):
         try:
             engine = EngineRuntime()
             success = engine.extract_audio(self.video_path, self.audio_output_path)
-            self.finished.emit(success, self.audio_output_path)
+            self.result_ready.emit(success, self.audio_output_path)
         except Exception as exc:
-            self.finished.emit(False, str(exc))
+            self.result_ready.emit(False, str(exc))
 
 
 class TranscriptionWorker(QThread):
-    finished = Signal(list, str)
+    result_ready = Signal(list, str)
 
     def __init__(self, audio_path, model_path, language):
         super().__init__()
@@ -69,11 +69,11 @@ class TranscriptionWorker(QThread):
         try:
             engine = EngineRuntime()
             segments = engine.transcribe_audio(self.audio_path, self.model_path, language=self.language)
-            self.finished.emit(segments if segments else [], "")
+            self.result_ready.emit(segments if segments else [], "")
         except Exception as exc:
             details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
             print(f"Transcription Thread Error:\n{details}")
-            self.finished.emit([], details or str(exc))
+            self.result_ready.emit([], details or str(exc))
 
 
 class AlternateRangeTranscriptionWorker(QThread):
@@ -135,7 +135,7 @@ class AlternateRangeTranscriptionWorker(QThread):
 
 
 class TranslationWorker(QThread):
-    finished = Signal(str, str, str)
+    result_ready = Signal(str, str, str)
 
     def __init__(self, srt_text, model_path, src_lang, target_lang, enable_polish):
         super().__init__()
@@ -164,15 +164,15 @@ class TranslationWorker(QThread):
                 fallback_notice = "\n".join(result.warnings or []) if result.used_fallback else ""
             except Exception:
                 raise
-            self.finished.emit(translated_srt, "", fallback_notice)
+            self.result_ready.emit(translated_srt, "", fallback_notice)
         except Exception as exc:
             print(f"Translation Thread Error: {exc}")
-            self.finished.emit("", str(exc), "")
+            self.result_ready.emit("", str(exc), "")
 
 
 class OllamaStatusWorker(QThread):
     """Probe the local Ollama server without blocking the Settings dialog."""
-    finished = Signal(bool, str)
+    result_ready = Signal(bool, str)
 
     def __init__(self, base_url: str):
         super().__init__()
@@ -187,14 +187,14 @@ class OllamaStatusWorker(QThread):
                 endpoint = endpoint[:-3]
             response = requests.get(f"{endpoint}/api/tags", timeout=2.5)
             response.raise_for_status()
-            self.finished.emit(True, "Connected")
+            self.result_ready.emit(True, "Connected")
         except Exception as exc:
-            self.finished.emit(False, f"Not connected: {exc}")
+            self.result_ready.emit(False, f"Not connected: {exc}")
 
 
 class OcrTranslatorCaptureWorker(QThread):
     """One-shot OCR capture used by the editor utility, never by ASR."""
-    finished = Signal(str, str)
+    result_ready = Signal(str, str)
 
     def __init__(self, video_path, position_seconds, normalized_rect):
         super().__init__()
@@ -208,14 +208,14 @@ class OcrTranslatorCaptureWorker(QThread):
             text = extract_ocr_text_from_video_region(
                 self.video_path, self.position_seconds, self.normalized_rect
             )
-            self.finished.emit(text, "")
+            self.result_ready.emit(text, "")
         except Exception as exc:
-            self.finished.emit("", str(exc))
+            self.result_ready.emit("", str(exc))
 
 
 class OcrTranslatorTranslationWorker(QThread):
     """Translate a captured OCR value with the configured app provider."""
-    finished = Signal(str, str)
+    result_ready = Signal(str, str)
 
     def __init__(self, text, source_lang, target_lang):
         super().__init__()
@@ -251,13 +251,13 @@ class OcrTranslatorTranslationWorker(QThread):
                 raise RuntimeError("The translator returned no text.")
             actual_provider = str(actual_provider or selected_provider).strip()
             print(f"[OCR Translator] Translation completed using: {actual_provider}")
-            self.finished.emit(translated, "")
+            self.result_ready.emit(translated, "")
         except Exception as exc:
-            self.finished.emit("", str(exc))
+            self.result_ready.emit("", str(exc))
 
 
 class RewriteTranslationWorker(QThread):
-    finished = Signal(str, str)
+    result_ready = Signal(str, str)
 
     def __init__(self, source_segments, translated_segments, src_lang, style_instruction=""):
         super().__init__()
@@ -284,14 +284,14 @@ class RewriteTranslationWorker(QThread):
             )
             from translation.srt_utils import to_srt
 
-            self.finished.emit(to_srt(rewritten_segments), "")
+            self.result_ready.emit(to_srt(rewritten_segments), "")
         except Exception as exc:
             print(f"Rewrite Thread Error: {exc}")
-            self.finished.emit("", str(exc))
+            self.result_ready.emit("", str(exc))
 
 
 class RuntimeAssetsWorker(QThread):
-    finished = Signal(str, str)
+    result_ready = Signal(str, str)
     progress = Signal(int, str)  # percent (0-100) or -1 for indeterminate, message
 
     def __init__(self, workspace_root, whisper_model_name="medium", demucs_model_name="htdemucs"):
@@ -348,15 +348,15 @@ class RuntimeAssetsWorker(QThread):
                 details.append(warning)
 
             self.progress.emit(100, "All models ready.")
-            self.finished.emit("\n".join(details), "")
+            self.result_ready.emit("\n".join(details), "")
         except Exception as exc:
             details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
             print(f"RuntimeAssetsWorker Error:\n{details}")
-            self.finished.emit("", details or str(exc))
+            self.result_ready.emit("", details or str(exc))
 
 
 class ResourceDownloadWorker(QThread):
-    finished = Signal(str, str)
+    result_ready = Signal(str, str)
     progress = Signal(int, str)
 
     def __init__(self, workspace_root, resource_id):
@@ -368,15 +368,15 @@ class ResourceDownloadWorker(QThread):
         try:
             service = ResourceDownloadService(self.workspace_root)
             service.download_resource(self.resource_id, progress_cb=self.progress.emit)
-            self.finished.emit(self.resource_id, "")
+            self.result_ready.emit(self.resource_id, "")
         except Exception as exc:
             details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
             print(f"ResourceDownloadWorker Error:\n{details}")
-            self.finished.emit(self.resource_id, details or str(exc))
+            self.result_ready.emit(self.resource_id, details or str(exc))
 
 
 class TimelineWaveformWorker(QThread):
-    finished = Signal(object, object, float, str)
+    result_ready = Signal(object, object, float, str)
 
     def __init__(self, request_signature, video_path, audio_path, temp_audio_path):
         super().__init__()
@@ -418,7 +418,7 @@ class TimelineWaveformWorker(QThread):
                     audio_path = temp_audio
 
             if not audio_path or not os.path.exists(audio_path):
-                self.finished.emit(self.request_signature, [], 0.0, "")
+                self.result_ready.emit(self.request_signature, [], 0.0, "")
                 return
 
             from audio_mixer import _require_pydub
@@ -432,13 +432,13 @@ class TimelineWaveformWorker(QThread):
             duration_s = max(0.0, len(audio) / 1000.0)
 
             if not samples.size:
-                self.finished.emit(self.request_signature, [], duration_s, "")
+                self.result_ready.emit(self.request_signature, [], duration_s, "")
                 return
 
             samples = samples.astype(np.float32)
             peak = float(np.max(np.abs(samples))) if samples.size else 0.0
             if peak <= 0.0:
-                self.finished.emit(self.request_signature, [], duration_s, "")
+                self.result_ready.emit(self.request_signature, [], duration_s, "")
                 return
             samples /= max(1.0, peak)
 
@@ -462,14 +462,14 @@ class TimelineWaveformWorker(QThread):
                 value = max(peak_value, rms_value * 1.15)
                 waveform.append(min(1.0, max(0.03, value ** 0.85)))
 
-            self.finished.emit(self.request_signature, waveform, duration_s, "")
+            self.result_ready.emit(self.request_signature, waveform, duration_s, "")
         except Exception as exc:
             details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
-            self.finished.emit(self.request_signature, [], 0.0, details or str(exc))
+            self.result_ready.emit(self.request_signature, [], 0.0, details or str(exc))
 
 
 class TimelineThumbnailWorker(QThread):
-    finished = Signal(object, object, str)
+    result_ready = Signal(object, object, str)
 
     def __init__(self, request_signature, video_path, duration_s, thumb_dir):
         super().__init__()
@@ -481,7 +481,7 @@ class TimelineThumbnailWorker(QThread):
     def run(self):
         try:
             if not self.video_path or not os.path.exists(self.video_path) or self.duration_s <= 0.0:
-                self.finished.emit(self.request_signature, [], "")
+                self.result_ready.emit(self.request_signature, [], "")
                 return
 
             ffmpeg_candidates = [
@@ -497,7 +497,7 @@ class TimelineThumbnailWorker(QThread):
                     break
 
             if not ffmpeg_path:
-                self.finished.emit(self.request_signature, [], "")
+                self.result_ready.emit(self.request_signature, [], "")
                 return
 
             # Adapt density to media length: short clips need frequent visual
@@ -563,14 +563,14 @@ class TimelineThumbnailWorker(QThread):
                 if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                     thumbnails.append((float(timestamp_s), output_path))
 
-            self.finished.emit(self.request_signature, thumbnails, "")
+            self.result_ready.emit(self.request_signature, thumbnails, "")
         except Exception as exc:
             details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
-            self.finished.emit(self.request_signature, [], details or str(exc))
+            self.result_ready.emit(self.request_signature, [], details or str(exc))
 
 
 class PrepareWorkflowWorker(QThread):
-    finished = Signal(str, str)
+    result_ready = Signal(str, str)
     step_started = Signal(str)
 
     def __init__(
@@ -647,7 +647,7 @@ class PrepareWorkflowWorker(QThread):
                     step_callback=self.step_started.emit,
                 )
                 state_path = os.path.join(project_state.project_root, "project.json")
-                self.finished.emit(state_path, "")
+                self.result_ready.emit(state_path, "")
             finally:
                 if old_url is None:
                     os.environ.pop("CAPCAP_REMOTE_API_URL", None)
@@ -658,11 +658,11 @@ class PrepareWorkflowWorker(QThread):
                 else:
                     os.environ["CAPCAP_REMOTE_API_TOKEN"] = old_token
         except Exception as exc:
-            self.finished.emit("", str(exc))
+            self.result_ready.emit("", str(exc))
 
 
 class VoiceOverWorker(QThread):
-    finished = Signal(str, str, object, str)
+    result_ready = Signal(str, str, object, str)
     progress = Signal(str)  # New signal for progress messages
 
     def __init__(self, workspace_root, segments, output_dir, background_path, audio_handling_mode, voice_name, voice_speed, timing_sync_mode, original_volume, dub_volume, project_state_path="", project_temp_dir="", ai_rewrite_dubbing=False, dubbing_style_instruction="", source_language="auto"):
@@ -706,7 +706,7 @@ class VoiceOverWorker(QThread):
                 source_language=self.source_language,
                 on_progress=self.progress.emit,
             )
-            self.finished.emit(
+            self.result_ready.emit(
                 result.get("voice_track", ""),
                 result.get("mixed_path", ""),
                 result.get("segments", []),
@@ -714,11 +714,11 @@ class VoiceOverWorker(QThread):
             )
         except Exception as exc:
             print(f"[VoiceOverWorker ERROR] {str(exc)}")
-            self.finished.emit("", "", [], str(exc))
+            self.result_ready.emit("", "", [], str(exc))
 
 
 class FinalExportWorker(QThread):
-    finished = Signal(str, str)
+    result_ready = Signal(str, str)
     progress = Signal(int, str)
 
     def __init__(self, workspace_root, video_path, output_path, mode, srt_path="", ass_path="", audio_path="", subtitle_style=None, output_quality="source", output_fps="source", output_ratio="source", output_scale_mode="fit", output_fill_focus_x=0.5, output_fill_focus_y=0.5, video_filter_state=None, original_audio_gain_db=0.0, project_state_path="", project_temp_dir=""):
@@ -766,13 +766,13 @@ class FinalExportWorker(QThread):
                 project_temp_dir=self.project_temp_dir,
                 on_progress=self.progress.emit,
             )
-            self.finished.emit(output_path, "")
+            self.result_ready.emit(output_path, "")
         except Exception as exc:
-            self.finished.emit("", str(exc))
+            self.result_ready.emit("", str(exc))
 
 
 class SegmentAudioPreviewWorker(QThread):
-    finished = Signal(int, str, str)
+    result_ready = Signal(int, str, str)
 
     def __init__(self, workspace_root, index, text, voice_name, voice_speed, temp_dir="", cache_temp_dir=""):
         super().__init__()
@@ -873,14 +873,14 @@ class SegmentAudioPreviewWorker(QThread):
                 )
             else:
                 output = base_wav_path
-            self.finished.emit(self.index, output, "")
+            self.result_ready.emit(self.index, output, "")
         except Exception as exc:
             details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
-            self.finished.emit(self.index, "", details or str(exc))
+            self.result_ready.emit(self.index, "", details or str(exc))
 
 
 class VoiceSamplePreviewWorker(QThread):
-    finished = Signal(str, str)
+    result_ready = Signal(str, str)
     progress = Signal(str)
 
     def __init__(self, workspace_root, text, voice_name, voice_speed, temp_dir=""):
@@ -901,12 +901,12 @@ class VoiceSamplePreviewWorker(QThread):
             base_wav_path = os.path.join(temp_dir, f"voice_sample_{cache_key}_base.wav")
             if abs(float(self.voice_speed) - 1.0) >= 0.02:
                 if self._is_preview_audio_usable(wav_path):
-                    self.finished.emit(self._normalize_preview_wav(wav_path, temp_dir=temp_dir), "")
+                    self.result_ready.emit(self._normalize_preview_wav(wav_path, temp_dir=temp_dir), "")
                     return
                 self._remove_if_exists(wav_path)
             elif os.path.exists(base_wav_path):
                 if self._is_preview_audio_usable(base_wav_path):
-                    self.finished.emit(self._normalize_preview_wav(base_wav_path, temp_dir=temp_dir), "")
+                    self.result_ready.emit(self._normalize_preview_wav(base_wav_path, temp_dir=temp_dir), "")
                     return
                 self._remove_if_exists(base_wav_path)
             engine = EngineRuntime()
@@ -938,10 +938,10 @@ class VoiceSamplePreviewWorker(QThread):
             output = self._normalize_preview_wav(output, temp_dir=temp_dir)
             if not self._is_preview_audio_usable(output):
                 raise RuntimeError("Normalized voice preview audio is empty or invalid.")
-            self.finished.emit(output, "")
+            self.result_ready.emit(output, "")
         except Exception as exc:
             details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
-            self.finished.emit("", details or str(exc))
+            self.result_ready.emit("", details or str(exc))
 
     def _normalize_preview_wav(self, wav_path: str, *, temp_dir: str) -> str:
         candidate = str(wav_path or "").strip()

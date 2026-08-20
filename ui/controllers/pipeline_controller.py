@@ -398,14 +398,23 @@ class PipelineController:
         
         # Connect signals
         self.gui.prepare_workflow_thread.step_started.connect(self._on_prepare_step_started)
-        self.gui.prepare_workflow_thread.finished.connect(
+        self.gui.prepare_workflow_thread.result_ready.connect(
             lambda project_state_path, error, run_id=prepare_run_id: self.on_prepare_workflow_finished(
                 project_state_path,
                 error,
                 run_id,
             )
         )
+        self.gui.prepare_workflow_thread.finished.connect(
+            lambda worker=self.gui.prepare_workflow_thread: self._release_prepare_workflow_worker(worker)
+        )
         self.gui.prepare_workflow_thread.start()
+
+    def _release_prepare_workflow_worker(self, worker) -> None:
+        """Release the Python reference only after QThread has actually stopped."""
+        if getattr(self.gui, "prepare_workflow_thread", None) is worker:
+            self.gui.prepare_workflow_thread = None
+        worker.deleteLater()
 
     def _on_prepare_step_started(self, step_id, message=""):
         # The Prepare workflow runs in a separate local process, so mirror

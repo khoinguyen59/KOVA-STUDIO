@@ -13,7 +13,7 @@ from services import EngineRuntime
 
 
 class PreviewMuxWorker(QThread):
-    finished = Signal(str, str)
+    result_ready = Signal(str, str)
 
     def __init__(self, video_path, audio_path, output_path, mode="voice", srt_path="", subtitle_style=None, render_subtitles=True, target_width=None, target_height=None, output_scale_mode="fit", output_fill_focus_x=0.5, output_fill_focus_y=0.5, video_filter_state=None, mask_regions=None, logo_layers=None, temp_dir=""):
         super().__init__()
@@ -90,9 +90,9 @@ class PreviewMuxWorker(QThread):
                     shutil.copyfile(current_video, self.output_path)
                 output = self.output_path
 
-            self.finished.emit(output, "")
+            self.result_ready.emit(output, "")
         except Exception as exc:
-            self.finished.emit("", str(exc))
+            self.result_ready.emit("", str(exc))
         finally:
             if temp_mux_path and os.path.exists(temp_mux_path):
                 try:
@@ -102,7 +102,7 @@ class PreviewMuxWorker(QThread):
 
 
 class QuickPreviewWorker(QThread):
-    finished = Signal(str, str)
+    result_ready = Signal(str, str)
 
     def __init__(self, video_path, output_path, mode, start_seconds, duration_seconds, srt_path="", ass_path="", audio_path="", subtitle_style=None, target_width=None, target_height=None, output_scale_mode="fit", output_fill_focus_x=0.5, output_fill_focus_y=0.5, video_filter_state=None, original_audio_gain_db=0.0, mask_regions=None, blur_regions=None, logo_layers=None, text_ass_path="", text_image_layers=None, temp_dir=""):
         super().__init__()
@@ -214,9 +214,9 @@ class QuickPreviewWorker(QThread):
             else:
                 shutil.copyfile(current_video, self.output_path)
 
-            self.finished.emit(self.output_path, "")
+            self.result_ready.emit(self.output_path, "")
         except Exception as exc:
-            self.finished.emit("", str(exc))
+            self.result_ready.emit("", str(exc))
         finally:
             for path in temp_paths:
                 if os.path.exists(path):
@@ -227,7 +227,7 @@ class QuickPreviewWorker(QThread):
 
 
 class ExactFramePreviewWorker(QThread):
-    finished = Signal(str, str)
+    result_ready = Signal(str, str)
 
     def __init__(self, video_path, output_path, timestamp_seconds, srt_path="", subtitle_style=None, target_width=None, target_height=None, output_scale_mode="fit", output_fill_focus_x=0.5, output_fill_focus_y=0.5, video_filter_state=None):
         super().__init__()
@@ -283,6 +283,6 @@ class ExactFramePreviewWorker(QThread):
                 focus_y=self.output_fill_focus_y,
                 video_filter_state=self.video_filter_state,
             )
-            self.finished.emit(output, "")
+            self.result_ready.emit(output, "")
         except Exception as exc:
-            self.finished.emit("", str(exc))
+            self.result_ready.emit("", str(exc))

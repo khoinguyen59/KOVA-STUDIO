@@ -74,10 +74,53 @@ def _validate_notebooks_and_onefile_spec() -> None:
     build_script = (ROOT / "build_final_clean.bat").read_text(encoding="utf-8-sig")
     assert "COLLECT(" not in spec
     assert "a.binaries," in spec and "a.zipfiles," in spec and "a.datas," in spec
+    assert 'collect_dynamic_libs("numpy")' in spec
+    assert '"numpy.libs"' in spec
     assert "set \"RELEASE_DIR=%PROJECT_ROOT%release\"" in build_script
     assert "--distpath \"%RELEASE_DIR%\"" in build_script
     assert "%RELEASE_DIR%\\CapCap.exe" in build_script
     print("[OK] Notebook JSON/code and one-file packaging contract validated.")
+
+
+def _verify_qthread_result_lifecycle() -> None:
+    """Ensure result signals never shadow QThread.finished again."""
+    worker_sources = [
+        ROOT / "ui" / "worker_adapters" / "processing_workers.py",
+        ROOT / "ui" / "worker_adapters" / "preview_workers.py",
+    ]
+    violations = []
+    for source_path in worker_sources:
+        module = ast.parse(source_path.read_text(encoding="utf-8-sig"), filename=str(source_path))
+        for class_node in (node for node in ast.walk(module) if isinstance(node, ast.ClassDef)):
+            inherits_qthread = any(
+                (isinstance(base, ast.Name) and base.id == "QThread")
+                or (isinstance(base, ast.Attribute) and base.attr == "QThread")
+                for base in class_node.bases
+            )
+            if not inherits_qthread:
+                continue
+            for statement in class_node.body:
+                targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target] if isinstance(statement, ast.AnnAssign) else []
+                if any(isinstance(target, ast.Name) and target.id == "finished" for target in targets):
+                    violations.append(f"{source_path.relative_to(ROOT)}:{class_node.name}")
+    assert not violations, "QThread.finished must remain the native Qt lifecycle signal: " + ", ".join(violations)
+
+    from PySide6.QtCore import QCoreApplication, QTimer
+    from ui.worker_adapters.processing_workers import TimelineWaveformWorker
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    results = []
+    native_finished = []
+    worker = TimelineWaveformWorker("contract", "", "", "")
+    worker.result_ready.connect(lambda *args: results.append(args))
+    worker.finished.connect(lambda: (native_finished.append(True), app.quit()))
+    worker.start()
+    QTimer.singleShot(5000, app.quit)
+    app.exec()
+    assert worker.wait(1000), "TimelineWaveformWorker did not stop cleanly."
+    assert results == [("contract", [], 0.0, "")]
+    assert native_finished == [True]
+    print("[OK] QThread result/native-finished lifecycle validated.")
 
 
 class _FakeColabHandler(BaseHTTPRequestHandler):
@@ -263,6 +306,7 @@ def _smoke_test_frozen_exe() -> None:
 def main() -> None:
     _parse_all_project_python()
     _validate_notebooks_and_onefile_spec()
+    _verify_qthread_result_lifecycle()
     _exercise_remote_adapters()
     _verify_remote_server_forces_local_profile()
     if "--smoke-exe" in sys.argv:

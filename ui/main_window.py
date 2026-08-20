@@ -2962,12 +2962,12 @@ class VideoTranslatorGUI(QMainWindow):
         worker = TimelineWaveformWorker(
             request_signature, video_path, "", self._waveform_temp_path()
         )
-        worker.finished.connect(self._on_timeline_waveform_ready)
+        worker.result_ready.connect(self._on_timeline_waveform_ready)
+        worker.finished.connect(lambda worker=worker: self._on_timeline_waveform_thread_finished(worker))
         self._timeline_waveform_worker = worker
         worker.start()
 
     def _on_timeline_waveform_ready(self, request_signature, waveform, duration_s, error):
-        self._timeline_waveform_worker = None
         if request_signature != self._desired_timeline_waveform_request:
             self.refresh_timeline_waveform()
             return
@@ -2986,6 +2986,14 @@ class VideoTranslatorGUI(QMainWindow):
             )
         if hasattr(self, "timeline"):
             self.timeline.set_waveform_data(self._timeline_waveform_samples, self._timeline_waveform_duration_s)
+
+    def _on_timeline_waveform_thread_finished(self, worker):
+        """Release a waveform worker only after QThread has really stopped."""
+        if self._timeline_waveform_worker is worker:
+            self._timeline_waveform_worker = None
+        worker.deleteLater()
+        # A newer source may have been selected while this worker was active.
+        self.refresh_timeline_waveform()
 
     def schedule_timeline_visual_refresh(self, *, waveform: bool = True, thumbnails: bool = True, delay_ms: int = 40):
         # V1/A1 visuals are tied only to the source media, not to a pipeline
@@ -3045,12 +3053,12 @@ class VideoTranslatorGUI(QMainWindow):
         duration_s = max(0.0, float(self.timeline.duration or 0) / 1000.0)
         thumb_dir = os.path.join(self.get_workspace_temp_root(create=True), "timeline_thumbnails")
         worker = TimelineThumbnailWorker(request_signature, video_path, duration_s, thumb_dir)
-        worker.finished.connect(self._on_timeline_video_thumbnails_ready)
+        worker.result_ready.connect(self._on_timeline_video_thumbnails_ready)
+        worker.finished.connect(lambda worker=worker: self._on_timeline_thumbnail_thread_finished(worker))
         self._timeline_thumbnail_worker = worker
         worker.start()
 
     def _on_timeline_video_thumbnails_ready(self, request_signature, thumbnails, error):
-        self._timeline_thumbnail_worker = None
         if request_signature != self._desired_timeline_thumbnail_request:
             self.refresh_timeline_video_thumbnails()
             return
@@ -3068,6 +3076,14 @@ class VideoTranslatorGUI(QMainWindow):
             self._timeline_video_thumbnails = pixmaps
         if hasattr(self, "timeline"):
             self.timeline.set_video_thumbnails(self._timeline_video_thumbnails)
+
+    def _on_timeline_thumbnail_thread_finished(self, worker):
+        """Release a thumbnail worker only after QThread has really stopped."""
+        if self._timeline_thumbnail_worker is worker:
+            self._timeline_thumbnail_worker = None
+        worker.deleteLater()
+        # Start a replacement request when the source changed during rendering.
+        self.refresh_timeline_video_thumbnails()
 
     def on_audio_source_mode_changed(self):
         if not hasattr(self, "audio_source_hint_label"):
@@ -10545,8 +10561,11 @@ class VideoTranslatorGUI(QMainWindow):
         overlay.set_capturing(True)
         worker = OcrTranslatorCaptureWorker(video_path, position_ms / 1000.0, self._ocr_translator_rect)
         self._ocr_translator_capture_worker = worker
-        worker.finished.connect(self._on_ocr_translator_capture_finished)
-        worker.finished.connect(worker.deleteLater)
+        worker.result_ready.connect(self._on_ocr_translator_capture_finished)
+        # Retain the Python wrapper until Qt emits its native finished signal.
+        # The result callback clears the UI reference earlier so another OCR
+        # request can be started immediately.
+        self._retain_worker_until_finished(worker)
         worker.start()
         self.log(f"[OCR Translator] Capturing visual text at {position_ms / 1000.0:.2f}s.")
 
@@ -10615,8 +10634,8 @@ class VideoTranslatorGUI(QMainWindow):
                     return
                 translated_edit.setPlainText(translated)
                 self.log("[OCR Translator] Translation complete.")
-            worker.finished.connect(finished)
-            worker.finished.connect(worker.deleteLater)
+            worker.result_ready.connect(finished)
+            self._retain_worker_until_finished(worker)
             worker.start()
 
         translate_btn.clicked.connect(translate)
@@ -11464,7 +11483,8 @@ class VideoTranslatorGUI(QMainWindow):
             temp_dir=self.get_project_temp_dir("voice_sample_preview"),
         )
         worker.progress.connect(self.log)
-        worker.finished.connect(self.on_voice_sample_preview_ready)
+        worker.result_ready.connect(self.on_voice_sample_preview_ready)
+        self._retain_worker_until_finished(worker)
         self._voice_sample_preview_thread = worker
         worker.start()
 
@@ -11526,7 +11546,8 @@ class VideoTranslatorGUI(QMainWindow):
             temp_dir=self.get_project_temp_dir("segment_audio_preview"),
             cache_temp_dir=self.get_project_temp_dir("tts"),
         )
-        worker.finished.connect(self.on_segment_audio_preview_ready)
+        worker.result_ready.connect(self.on_segment_audio_preview_ready)
+        self._retain_worker_until_finished(worker)
         self._segment_preview_threads[index] = worker
         worker.start()
 
@@ -12776,7 +12797,8 @@ class VideoTranslatorGUI(QMainWindow):
         self.progress_bar.setValue(10)
         self.update_project_step("extract_audio", "running")
         self.extraction_thread = ExtractionWorker(v_path, a_path)
-        self.extraction_thread.finished.connect(self.on_extraction_finished)
+        self.extraction_thread.result_ready.connect(self.on_extraction_finished)
+        self._retain_worker_until_finished(self.extraction_thread)
         self.extraction_thread.start()
 
     def on_extraction_finished(self, success, path):
@@ -12815,7 +12837,8 @@ class VideoTranslatorGUI(QMainWindow):
         self.update_project_step("separate_audio", "running")
         
         self.vocal_thread = VocalSeparationWorker(audio_src, target_dir)
-        self.vocal_thread.finished.connect(self.on_vocal_separation_finished)
+        self.vocal_thread.result_ready.connect(self.on_vocal_separation_finished)
+        self._retain_worker_until_finished(self.vocal_thread)
         self.vocal_thread.start()
 
     def on_vocal_separation_finished(self, vocal, music, error):
@@ -13809,7 +13832,8 @@ class VideoTranslatorGUI(QMainWindow):
             self.get_source_language_code(),
         )
         self.voice_thread.progress.connect(self.log)
-        self.voice_thread.finished.connect(self.on_voiceover_finished)
+        self.voice_thread.result_ready.connect(self.on_voiceover_finished)
+        self._retain_worker_until_finished(self.voice_thread)
         self.voice_thread.start()
 
     def _apply_generated_tts_texts(self, voice_segments):
@@ -14519,6 +14543,18 @@ class VideoTranslatorGUI(QMainWindow):
                     print(f"[Cleanup] Failed to terminate segment thread {idx}: {e}")
             threads_dict.clear()
         print("[Cleanup] Worker termination complete.")
+
+    @staticmethod
+    def _retain_worker_until_finished(worker):
+        """Keep a QThread wrapper alive until its native lifecycle completes.
+
+        A result signal is emitted from ``run()`` before Qt emits
+        ``QThread.finished``. Result handlers can clear their UI reference,
+        so this native-signal connection captures the wrapper until the
+        thread has stopped and can be safely deleted.
+        """
+        worker.finished.connect(lambda worker=worker: worker.deleteLater())
+        return worker
 
     def closeEvent(self, event):
         blur_signals_were_blocked = None

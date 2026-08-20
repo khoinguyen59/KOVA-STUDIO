@@ -995,7 +995,8 @@ class PreviewController:
             project_temp_dir=self.gui.get_project_temp_dir("export"),
         )
         self.gui.export_thread.progress.connect(self.gui.on_export_progress)
-        self.gui.export_thread.finished.connect(self.gui.on_export_finished)
+        self.gui.export_thread.result_ready.connect(self.gui.on_export_finished)
+        self.gui._retain_worker_until_finished(self.gui.export_thread)
         self.gui.export_thread.start()
 
     def preview_five_seconds(self):
@@ -1108,7 +1109,8 @@ class PreviewController:
             text_image_layers=text_image_layers,
             temp_dir=self.gui.get_project_temp_dir("preview"),
         )
-        self.gui.quick_preview_thread.finished.connect(self.gui.on_quick_preview_ready)
+        self.gui.quick_preview_thread.result_ready.connect(self.gui.on_quick_preview_ready)
+        self.gui._retain_worker_until_finished(self.gui.quick_preview_thread)
         self.gui.quick_preview_thread.start()
 
     def start_exact_frame_preview(self, show_dialog: bool = True):
@@ -1172,7 +1174,8 @@ class PreviewController:
             output_fill_focus_y=fill_focus_y,
             video_filter_state=self.gui.get_video_filter_state() if hasattr(self.gui, "get_video_filter_state") else {},
         )
-        self.gui.frame_preview_thread.finished.connect(self.gui.on_exact_frame_ready)
+        self.gui.frame_preview_thread.result_ready.connect(self.gui.on_exact_frame_ready)
+        self.gui._retain_worker_until_finished(self.gui.frame_preview_thread)
         self.gui.frame_preview_thread.start()
 
     def on_exact_frame_ready(self, output_path, error):
@@ -1447,9 +1450,10 @@ class PreviewController:
             logo_layers=logo_layers,
             temp_dir=self.gui.get_project_temp_dir("preview"),
         )
-        self.gui.preview_thread.finished.connect(
+        self.gui.preview_thread.result_ready.connect(
             lambda preview_path, error: self.gui.on_preview_ready(preview_path, error, styled_signature)
         )
+        self.gui._retain_worker_until_finished(self.gui.preview_thread)
         self.gui.log(f"[Preview] Starting preview thread")
         self.gui.preview_thread.start()
 
