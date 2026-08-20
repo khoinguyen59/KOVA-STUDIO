@@ -29,6 +29,8 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 | **23** | SRT gốc từ nút Transcription chỉ nằm trong thư mục tạm | Lưu trữ dự án | Trung bình | Đã fix triệt để |
 | **24** | Không thể lấy đồng thời nguồn STT và OCR độc lập | Luồng tạo phụ đề | Trung bình | Đã fix triệt để |
 | **25** | Processed Files có thể lỗi khi kiểm tra đường dẫn artifact | Hiển thị artifact | Nhẹ | Đã fix triệt để |
+| **26** | Colab TTS tạo track im lặng nhưng pipeline vẫn export | TTS/Export | Rất nghiêm trọng | Đã fix triệt để |
+| **27** | Subtitle/TTS lấy nguyên đoạn Whisper dài và chồng timeline | ASR/Subtitle | Rất nghiêm trọng | Đã fix triệt để |
 
 ---
 
@@ -286,3 +288,24 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Nguyên nhân gốc rễ (Root Cause):** `ui/utils/display_utils.py` gọi `os.path.exists()` nhưng không import module `os` rõ ràng.
 * **Cách xử lý (Fix Details):** Import `os` tường minh và hiển thị thêm hai artifact `Independent STT SRT` và `Independent OCR SRT` trong hộp thoại Processed Files.
 * **File liên quan:** [`ui/utils/display_utils.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/utils/display_utils.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
+
+---
+
+### 26. Colab TTS tạo track im lặng nhưng pipeline vẫn export
+* **Thời gian:** 21/08/2026
+* **Mô tả hiện tượng:** Video `1_final_vi2.mp4` hoàn tất và có audio gốc, nhưng hoàn toàn không có tiếng lồng tiếng. Project lại ghi `generate_tts: done`.
+* **Nguyên nhân gốc rễ (Root Cause):** Server All-in-One Colab chạy Linux nhưng `tts_processor.py` luôn chọn `bin/ffmpeg/ffmpeg.exe` của bundle Windows để đổi Edge-TTS MP3 sang WAV. Mỗi request TTS vì thế lỗi `Permission denied`. `VoiceWorkflow` bắt lỗi từng đoạn, ghi WAV im lặng thay thế rồi cache nó như một kết quả hợp lệ; export trộn audio gốc với track im lặng.
+* **Cách xử lý (Fix Details):**
+  * Trên POSIX/Colab, `tts_processor` dùng `ffmpeg` hệ thống (`shutil.which`) thay vì file `.exe`; notebook cài và kiểm tra FFmpeg trước khi khởi động server.
+  * Phân biệt lỗi xác thực API với lỗi quyền hệ điều hành để lỗi TTS không còn bị báo nhầm HTTP 401.
+  * Loại bỏ fallback WAV im lặng. Segment TTS thiếu, hỏng hoặc biên độ bằng 0 sẽ làm stage `generate_tts` thất bại, chặn export và không được ghi cache. Track voice cuối cũng được kiểm tra biên độ trước khi đánh dấu hoàn tất.
+* **File liên quan:** [`app/tts_processor.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/tts_processor.py), [`app/workflows/voice_workflow.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/workflows/voice_workflow.py), [`app/remote_api_server.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/remote_api_server.py), [`colab/CapCap_All_in_One_Colab.ipynb`](file:///C:/NTKhoi/Downloads/CAPCAP/colab/CapCap_All_in_One_Colab.ipynb), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
+
+---
+
+### 27. Subtitle/TTS lấy nguyên đoạn Whisper dài và chồng timeline
+* **Thời gian:** 21/08/2026
+* **Mô tả hiện tượng:** Video 14:59 chỉ có 25 cue Whisper. Nhiều cue dài 30–79 giây nên bản dịch hiển thị thành khối chữ rất lớn, không đi theo nhịp phụ đề. Một số timestamp còn chồng nhau vài trăm mili-giây.
+* **Nguyên nhân gốc rễ (Root Cause):** `SegmentService` chỉ chuyển thẳng từng recognition segment của Whisper thành một `Segment`. Dữ liệu word timestamp chính xác đã có nhưng không được dùng để tách cue trước khi tạo SRT, dịch và TTS. Một token lỗi còn có thể mang duration rất dài.
+* **Cách xử lý (Fix Details):** Thêm bước chuẩn hóa cue ASR trước khi ghi artifact/dịch: tách theo word timestamp, khoảng lặng, dấu câu, giới hạn 5.25 giây/36 ký tự và cắt các token có duration bất thường. Timeline được chuẩn hóa không chồng nhau; cue mới được dùng đồng nhất cho SRT gốc, bản dịch, TTS và Timeline. Chữ đã cháy trực tiếp trong video nguồn vẫn là pixel của video; nó có thể được che bằng mask nếu người dùng chọn, không phải subtitle track có thể xóa riêng.
+* **File liên quan:** [`app/services/segment_service.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/services/segment_service.py), [`app/workflows/prepare_workflow.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/workflows/prepare_workflow.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).

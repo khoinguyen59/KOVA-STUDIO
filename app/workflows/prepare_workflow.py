@@ -709,7 +709,7 @@ class PrepareWorkflow:
                 # Bump the signature when the chunk merge algorithm changes
                 # so a project cannot reuse an aggressively regrouped
                 # transcript. Raw per-chunk ASR cache entries remain valid.
-                audio_handling_mode=f"{audio_mode_key}|asr-merge-v4",
+                audio_handling_mode=f"{audio_mode_key}|asr-merge-v5|subtitle-cues-v1",
             )
             cached_transcription_signature = str(project_state.settings.get("transcription_signature", "") or "").strip()
             cached_transcript_path = project_state.artifacts.get("transcript_segments", "")
@@ -842,6 +842,16 @@ class PrepareWorkflow:
                     project_state.set_step_status("transcribe", "failed")
                     self.project_service.save_project(project_state)
                     raise RuntimeError("Transcription failed.")
+                asr_segment_count = len(raw_segments)
+                raw_segments = self.segment_service.normalize_transcript_cues(raw_segments)
+                if not raw_segments:
+                    project_state.set_step_status("transcribe", "failed")
+                    self.project_service.save_project(project_state)
+                    raise RuntimeError("Transcription did not produce usable timed subtitle cues.")
+                print(
+                    "[Subtitle Timing] Split/normalized ASR output: "
+                    f"{asr_segment_count} recognition segment(s) -> {len(raw_segments)} subtitle/TTS cue(s)."
+                )
                 segment_models = self.segment_service.transcript_dicts_to_models(raw_segments)
                 project_state.set_setting("transcription_signature", transcription_signature)
             if diarization_future is not None:

@@ -29,8 +29,8 @@ graph TD
    - `PipelineController`: Quản lý toàn bộ vòng đời của quy trình xử lý video, đồng bộ hóa trạng thái tiến trình và các chốt chặn an toàn (pre-flight checks).
    - `PrepareWorkflowWorker`, `VoiceOverWorker`, `FinalExportWorker`: Chạy nền bằng `QThread` đảm bảo giao diện luôn mượt mà 60 FPS, không bị giật lag.
 3. **Tầng Luồng công việc (Workflows Layer - `app/workflows/`)**:
-   - `PrepareWorkflow`: Trích xuất âm thanh, bóc băng giọng nói (ASR), phân đoạn câu (VAD/Chunking), dịch thuật và tạo phụ đề chuẩn.
-   - `VoiceWorkflow`: Khớp giọng đọc AI theo từng mốc thời gian phụ đề, hòa trộn âm thanh gốc và nhạc nền.
+   - `PrepareWorkflow`: Trích xuất âm thanh, bóc băng giọng nói (ASR), tách word-timestamp thành cue phụ đề ngắn không chồng nhau, dịch thuật và tạo phụ đề chuẩn.
+   - `VoiceWorkflow`: Khớp giọng đọc AI theo từng mốc thời gian phụ đề, xác minh WAV có âm thanh trước khi cho phép hòa trộn/xuất video.
    - `ExportWorkflow`: Render và xuất bản video cuối cùng với phụ đề gắn cứng (Hardsub) hoặc phụ đề mềm, video 1080p/4K.
 4. **Tầng Dịch vụ & Động cơ (Services & Engines Layer - `app/services/`, `app/engines/`)**:
    - `EngineRuntime`: Quản lý tập trung các Adapter (Whisper, Demucs, FFmpeg, Piper, Translator).
@@ -70,7 +70,7 @@ CAPCAP/
 │   ├── services/               # Các dịch vụ xử lý dữ liệu và thuật toán
 │   │   ├── engine_runtime.py            # Quản lý vòng đời và lựa chọn adapter
 │   │   ├── project_service.py           # Quản lý lưu trữ/tải project.json
-│   │   ├── segment_service.py           # Thuật toán cắt, gộp và đồng bộ phụ đề
+│   │   ├── segment_service.py           # Tách word-timestamp thành cue ngắn, không chồng timeline
 │   │   ├── chunking_service.py          # Tách audio theo khoảng lặng (VAD)
 │   │   └── voice_catalog_service.py     # Quản lý danh sách giọng đọc tiếng Việt/Anh
 │   │
@@ -145,7 +145,8 @@ CAPCAP/
    - Dùng `FFmpegAdapter` trích xuất âm thanh từ video sang định dạng WAV 16kHz Mono (mất < 1 giây).
    - Với chế độ Clean, gửi audio tới `POST /v1/separate-vocals` để tách stem trên GPU Colab; không chạy ONNX trên máy Windows.
    - Mã hóa audio/chunk thành Base64 và gửi request `POST /v1/transcribe` lên **Google Colab GPU Server**.
-   - Server Colab chạy mô hình Faster-Whisper trên card GPU Nvidia T4 và trả về danh sách các phân đoạn hội thoại cùng timestamps chính xác.
+   - Server Colab chạy mô hình Faster-Whisper trên card GPU Nvidia T4 và trả về danh sách các phân đoạn hội thoại cùng word timestamps.
+   - `SegmentService` tách kết quả ASR thành cue hiển thị/TTS tối đa 5.25 giây hoặc 36 ký tự, ngắt tại khoảng lặng/dấu câu và loại overlap trước khi tạo SRT hoặc dịch. Vì vậy SRT, Timeline và TTS luôn dùng cùng một bộ mốc thời gian.
 2. Dịch thuật phụ đề:
    - Sử dụng các nhà cung cấp dịch thuật AI (Gemini AI Polisher hoặc Google Web Translate) để dịch các đoạn thoại sang ngôn ngữ đích.
    - Tối ưu hóa độ dài câu và lưu trạng thái vào `project.json`.
@@ -157,6 +158,7 @@ CAPCAP/
 1. `VoiceOverWorker` chạy ngầm:
    - Duyệt qua từng câu phụ đề đã dịch.
    - Gọi `POST /v1/tts/synthesize` tới Colab để tạo giọng đọc AI khớp với độ dài câu và ngữ cảnh.
+   - Colab dùng FFmpeg Linux hệ thống để đổi audio TTS sang WAV. Mỗi WAV và track voice cuối phải có biên độ audio hợp lệ; nếu một đoạn thất bại hoặc im lặng, workflow đánh dấu lỗi và chặn export thay vì chèn silence placeholder.
    - Hòa trộn rãnh giọng lồng tiếng mới với rãnh nhạc nền đã được tách từ trước (Duck Audio: tự động giảm âm lượng nhạc nền khi có tiếng nói).
 
 ### Bước 4: Xem trước & Xuất video (Preview & Export)

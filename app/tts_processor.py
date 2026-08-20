@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -63,6 +64,21 @@ def _get_cached_piper_voice(*, model_path: str, on_progress: callable = None):
 
 
 def _ffmpeg_path():
+    """Return an FFmpeg executable that is usable in the current runtime.
+
+    The desktop bundle intentionally ships ``ffmpeg.exe`` for Windows. The
+    same Python source is also executed by the All-in-One Colab server, where
+    that Windows executable exists in the cloned repository but cannot run.
+    Prefer the system FFmpeg on POSIX hosts and keep the bundled executable as
+    the Windows fallback.
+    """
+    if os.name != "nt":
+        system_ffmpeg = shutil.which("ffmpeg")
+        if system_ffmpeg:
+            return system_ffmpeg
+        for candidate in ("/usr/bin/ffmpeg", "/bin/ffmpeg"):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
     return bin_path("ffmpeg", "ffmpeg.exe")
 
 

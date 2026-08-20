@@ -44,6 +44,10 @@ _STATUS_LOCK = threading.Lock()
 _STATUS = {"phase": "idle", "message": "Idle"}
 
 
+class RemoteAuthError(PermissionError):
+    """Authentication failure only; OS permission errors are server faults."""
+
+
 def _set_status(phase: str, message: str = "") -> None:
     with _STATUS_LOCK:
         _STATUS["phase"] = str(phase or "idle")
@@ -153,7 +157,7 @@ class CapCapRemoteHandler(BaseHTTPRequestHandler):
                 _json_response(self, 200, self._handle_export(payload))
                 return
             _json_response(self, 404, {"ok": False, "error": "Not found"})
-        except PermissionError as exc:
+        except RemoteAuthError as exc:
             _json_response(self, 401, {"ok": False, "error": str(exc)})
         except Exception as exc:
             tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
@@ -183,7 +187,7 @@ class CapCapRemoteHandler(BaseHTTPRequestHandler):
             return
         supplied = str(self.headers.get("X-CapCap-Token", "") or "").strip()
         if supplied != expected:
-            raise PermissionError("Invalid remote API token.")
+            raise RemoteAuthError("Invalid remote API token.")
 
     def _read_json_body(self) -> dict:
         raw_length = int(self.headers.get("Content-Length", "0") or "0")

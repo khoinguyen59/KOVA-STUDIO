@@ -1,4 +1,5 @@
 import importlib.util
+import audioop
 import os
 import re
 import time
@@ -173,6 +174,15 @@ class VoiceWorkflow:
             self.project_service.update_step(state, "mix_audio", "skipped", save=False)
         self.project_service.save_project(state)
 
+    def _mark_failed(self, state, *, with_background: bool) -> None:
+        """Persist a failed TTS stage so export cannot present a silent dub as done."""
+        if not state:
+            return
+        self.project_service.update_step(state, "generate_tts", "failed", save=False)
+        if with_background:
+            self.project_service.update_step(state, "mix_audio", "skipped", save=False)
+        self.project_service.save_project(state)
+
     def _load_manifest(self, tmp_dir: str) -> dict:
         return load_manifest(tmp_dir)
 
@@ -185,7 +195,7 @@ class VoiceWorkflow:
         manifest_by_cache_key = dict(manifest.get("by_cache_key", {}) or {})
         for idx, (seg, wav_path) in enumerate(zip(list(segments or []), list(wavs or []))):
             text = self._segment_tts_text(seg)
-            if not text or not wav_path or not os.path.exists(wav_path):
+            if not text or not self._is_usable_tts_wav(wav_path):
                 continue
             segment_voice_name = str((seg or {}).get("voice_name") or voice_name).strip() or voice_name
             cache_key = segment_cache_key(
@@ -810,17 +820,38 @@ class VoiceWorkflow:
             frame_count = wav_file.getnframes()
         return max(0.0, float(frame_count) / float(frame_rate))
 
-    def _write_silence_wav(self, wav_path: str, duration_seconds: float) -> str:
-        duration = max(0.2, float(duration_seconds or 0.0))
-        sample_rate = 16000
-        frame_count = max(1, int(round(duration * sample_rate)))
-        os.makedirs(os.path.dirname(wav_path) or ".", exist_ok=True)
-        with wave.open(wav_path, "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(sample_rate)
-            wav_file.writeframes(b"\x00\x00" * frame_count)
-        return wav_path
+    def _is_usable_tts_wav(self, wav_path: str) -> bool:
+        """Reject missing, malformed, and all-silence TTS WAV files.
+
+        A zero-amplitude placeholder used to be treated as a completed TTS
+        segment and then cached. That made the final export sound exactly
+        like the original track while the UI reported voice generation as
+        successful. A small peak threshold distinguishes a real voice from
+        that placeholder without requiring NumPy or FFmpeg locally.
+        """
+        if not wav_path or not os.path.exists(wav_path) or os.path.getsize(wav_path) <= 44:
+            return False
+        try:
+            with wave.open(wav_path, "rb") as wav_file:
+                sample_width = int(wav_file.getsampwidth() or 0)
+                frame_count = int(wav_file.getnframes() or 0)
+                if sample_width <= 0 or frame_count <= 0:
+                    return False
+                peak = 0
+                while True:
+                    frames = wav_file.readframes(8192)
+                    if not frames:
+                        break
+                    peak = max(peak, int(audioop.max(frames, sample_width) or 0))
+                    if peak >= 32:
+                        return True
+                return False
+        except Exception:
+            return False
+
+    def _require_usable_tts_wav(self, wav_path: str, *, label: str) -> None:
+        if not self._is_usable_tts_wav(wav_path):
+            raise RuntimeError(f"{label} did not produce audible WAV audio.")
 
     def _log_segment_fit_metrics(self, *, segments, wavs):
         clipped = 0
@@ -1480,11 +1511,11 @@ class VoiceWorkflow:
             cache_entry = manifest_segments.get(str(global_idx), {})
             cached_wav = str(cache_entry.get("wav_path", "")).strip()
             cached_key = str(cache_entry.get("cache_key", "")).strip()
-            if not (cached_key == cache_key and cached_wav and os.path.exists(cached_wav)):
+            if not (cached_key == cache_key and self._is_usable_tts_wav(cached_wav)):
                 cache_entry = dict(manifest_by_cache_key.get(cache_key, {}) or {})
                 cached_wav = str(cache_entry.get("wav_path", "")).strip()
                 cached_key = str(cache_entry.get("cache_key", "")).strip()
-            if cached_key == cache_key and cached_wav and os.path.exists(cached_wav):
+            if cached_key == cache_key and self._is_usable_tts_wav(cached_wav):
                 wavs[idx] = cached_wav
                 manifest_segments[str(global_idx)] = {
                     "cache_key": cache_key,
@@ -1526,6 +1557,10 @@ class VoiceWorkflow:
                         speed=provider_speed,
                         tmp_dir=tmp_dir,
                         on_progress=on_progress,
+                    )
+                    self._require_usable_tts_wav(
+                        str(pending_jobs[0]["wav_path"]),
+                        label="TTS warm-up",
                     )
                     manifest_segments[str(pending_jobs[0]["global_idx"])] = {
                         "cache_key": str(pending_jobs[0]["cache_key"]),
@@ -1570,6 +1605,7 @@ class VoiceWorkflow:
                     for job in pending_jobs
                 }
                 completed_count = 0
+                failures = []
                 for future in as_completed(future_map):
                     job = future_map[future]
                     idx = int(job["idx"])
@@ -1577,29 +1613,30 @@ class VoiceWorkflow:
                     seg_wav = str(job["wav_path"])
                     try:
                         future.result()
+                        self._require_usable_tts_wav(
+                            seg_wav,
+                            label=f"TTS segment {idx + 1}",
+                        )
                         completed_count += 1
                     except Exception as exc:
                         preview = " ".join(txt.split())
                         if len(preview) > 120:
                             preview = preview[:117] + "..."
+                        failures.append((idx + 1, preview, str(exc)))
                         if on_progress:
-                            on_progress(f"[TTS Warning] Segment {idx + 1} failed, using silence placeholder.")
-                        target_duration = max(
-                            0.2,
-                            float(segments[idx].get("end", 0.0)) - float(segments[idx].get("start", 0.0)),
-                        )
-                        self._write_silence_wav(seg_wav, target_duration)
+                            on_progress(f"[TTS Error] Segment {idx + 1} failed; export is blocked.")
                         try:
                             print(
                                 f"[Voice Workflow] TTS failed at subtitle segment {idx + 1}: "
-                                f"\"{preview}\". Using silence placeholder. Error: {exc}"
+                                f"\"{preview}\". Export is blocked. Error: {exc}"
                             )
                         except Exception:
                             safe_preview = preview.encode("ascii", "replace").decode("ascii")
                             print(
                                 f"[Voice Workflow] TTS failed at subtitle segment {idx + 1}: "
-                                f"\"{safe_preview}\". Using silence placeholder. Error: {exc}"
+                                f"\"{safe_preview}\". Export is blocked. Error: {exc}"
                             )
+                        continue
                     manifest_segments[str(job["global_idx"])] = {
                         "cache_key": str(job["cache_key"]),
                         "wav_path": seg_wav,
@@ -1609,6 +1646,16 @@ class VoiceWorkflow:
                     }
                     manifest_by_cache_key[str(job["cache_key"])] = dict(manifest_segments[str(job["global_idx"])])
                     wavs[idx] = seg_wav
+                if failures:
+                    manifest["segments"] = manifest_segments
+                    manifest["by_cache_key"] = manifest_by_cache_key
+                    self._save_manifest(tmp_dir, manifest)
+                    failed_ids = ", ".join(str(item[0]) for item in failures[:8])
+                    extra = "" if len(failures) <= 8 else ", ..."
+                    raise RuntimeError(
+                        f"TTS failed for {len(failures)}/{len(segments)} subtitle segment(s) "
+                        f"(segments: {failed_ids}{extra}). No silent placeholder was created; fix Colab TTS and retry."
+                    )
         elif log:
             print(f"[Voice Workflow] TTS synth jobs: pending=0, cache_hits={cache_hits}, workers=0, native_speed={provider_speed:.2f}")
 
@@ -1713,14 +1760,18 @@ class VoiceWorkflow:
         )
 
         synth_started = time.perf_counter()
-        wavs = self._synthesize_segment_wavs(
-            segments=segments,
-            tmp_dir=tmp_dir,
-            voice_name=voice_name,
-            provider_speed=provider_speed,
-            voice_provider=voice_provider,
-            on_progress=on_progress,
-        )
+        try:
+            wavs = self._synthesize_segment_wavs(
+                segments=segments,
+                tmp_dir=tmp_dir,
+                voice_name=voice_name,
+                provider_speed=provider_speed,
+                voice_provider=voice_provider,
+                on_progress=on_progress,
+            )
+        except Exception:
+            self._mark_failed(state, with_background=bool(background_path))
+            raise
         wavs = self._retry_overlong_segments(
             segments=segments,
             wavs=wavs,
@@ -1772,6 +1823,11 @@ class VoiceWorkflow:
             output_wav_path=voice_track,
             gain_db=0.0,
         )
+        try:
+            self._require_usable_tts_wav(voice_track, label="Final TTS voice track")
+        except Exception:
+            self._mark_failed(state, with_background=bool(background_path))
+            raise
         build_elapsed = time.perf_counter() - build_started
 
         # Skip mixed audio creation - will be generated at export time with current volumes

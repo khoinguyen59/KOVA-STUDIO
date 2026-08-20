@@ -93,6 +93,9 @@ def _validate_notebooks_and_onefile_spec() -> None:
     assert "separate_vocals(audio_output_path" in prepare_source
     assert "_resolve_preview_background_audio_path" in preview_source
     assert "mix_original_with_dub(" in preview_source
+    tts_source = (ROOT / "app" / "tts_processor.py").read_text(encoding="utf-8-sig")
+    assert 'shutil.which("ffmpeg")' in tts_source
+    assert "apt-get install -y -qq ffmpeg" in all_source
     print("[OK] Notebook JSON/code and one-file packaging contract validated.")
 
 
@@ -261,6 +264,66 @@ def _exercise_independent_stt_ocr_workflow() -> None:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+def _verify_timed_cues_and_tts_failure_guard() -> None:
+    """Regression coverage for the reproduced giant-subtitle/silent-TTS bug."""
+    from services.segment_service import SegmentService
+    from workflows.voice_workflow import VoiceWorkflow
+    import wave
+
+    raw_segments = [
+        {
+            "start": 0.0,
+            "end": 12.0,
+            "text": "long recognition segment",
+            "words": [
+                {"start": float(index), "end": float(index + 1), "text": chr(0x4E00 + index)}
+                for index in range(12)
+            ],
+        },
+        {
+            # Starts before the previous ASR segment ends: normalized output
+            # must never emit overlapping visual/TTS cues.
+            "start": 10.5,
+            "end": 14.0,
+            "text": "overlap",
+            "words": [
+                {"start": 10.5, "end": 11.0, "text": "續"},
+                {"start": 11.0, "end": 12.0, "text": "篇"},
+            ],
+        },
+    ]
+    cues = SegmentService().normalize_transcript_cues(raw_segments)
+    assert len(cues) >= 3
+    assert max(cue["end"] - cue["start"] for cue in cues) <= 5.25
+    assert all(cues[index]["start"] >= cues[index - 1]["end"] for index in range(1, len(cues)))
+    assert all(cue["words"] for cue in cues)
+
+    class _SilentTtsRuntime:
+        def synthesize_segment(self, *, wav_path: str, **_kwargs):
+            with wave.open(wav_path, "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(16000)
+                handle.writeframes(b"\x00\x00" * 1600)
+            return wav_path
+
+    with tempfile.TemporaryDirectory(prefix="capcap_tts_failure_guard_") as temp_dir:
+        workflow = VoiceWorkflow(temp_dir)
+        workflow.engine_runtime = _SilentTtsRuntime()
+        workflow._voice_provider = lambda _voice_name: "edge"
+        try:
+            workflow._synthesize_segment_wavs(
+                segments=[{"start": 0.0, "end": 1.0, "text": "Xin chao"}],
+                tmp_dir=temp_dir,
+                voice_name="edge:vi-VN-HoaiMyNeural",
+            )
+        except RuntimeError as exc:
+            assert "No silent placeholder" in str(exc)
+        else:
+            raise AssertionError("Silent TTS output must fail instead of reaching export.")
+    print("[OK] Long ASR segments split into non-overlapping cues; silent TTS blocks export.")
 
 
 class _FakeColabHandler(BaseHTTPRequestHandler):
@@ -450,6 +513,7 @@ def main() -> None:
     _verify_all_in_one_colab_preflight()
     _verify_independent_stt_ocr_sources()
     _exercise_independent_stt_ocr_workflow()
+    _verify_timed_cues_and_tts_failure_guard()
     _exercise_remote_adapters()
     _verify_remote_server_forces_local_profile()
     if "--smoke-exe" in sys.argv:
