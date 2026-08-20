@@ -52,6 +52,7 @@ CAPCAP/
 ├── PROJECT_GOALS.md            # Tài liệu yêu cầu và mục tiêu cốt lõi của dự án
 ├── ERROR_LOG.md                # Nhật ký theo dõi lỗi, nguyên nhân và cách xử lý
 ├── PROJECT_STRUCTURE.md        # Tài liệu cấu trúc dự án chuẩn (File hiện tại)
+├── WORKFLOW_GUIDE.md           # Workflow vận hành, lựa chọn chạy và hand-off SRT ngoài app
 ├── CapCap.spec                 # Cấu hình đóng gói PyInstaller
 ├── build_final_clean.bat       # Script build và đóng gói EXE bản phát hành
 │
