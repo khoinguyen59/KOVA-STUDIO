@@ -116,6 +116,21 @@ CAPCAP/
 
 ---
 
+### 3.1. Canonical Colab Notebook
+
+- Giao diện desktop chỉ mở và hướng dẫn chạy `CapCap_All_in_One_Colab.ipynb`.
+- Notebook này là server GPU duy nhất cho pipeline: `transcribe`, `translate`, `tts` và `separate_vocals`.
+- `CapCap_Whisper_Colab.ipynb` chỉ còn là tài liệu kỹ thuật legacy; không thuộc luồng Setup Colab của người dùng.
+
+### 3.2. Nguồn phụ đề kép STT + OCR (External SRT Workflow)
+
+- Trong **Settings → Subtitle source**, lựa chọn `Audio STT + Video OCR (two separate SRT files)` tạo hai nguồn độc lập, không ghép tự động:
+  - `projects/<project-id>/subtitle/original_stt.srt`: lời nói được bóc băng bằng Whisper qua All-in-One Colab GPU.
+  - `projects/<project-id>/subtitle/original_ocr.srt`: chữ phụ đề quét độc lập từ khung hình video bằng OCR.
+- `PrepareWorkflow` luôn lưu SRT STT trước khi chạy OCR; nếu OCR không đọc được vùng chữ, file STT vẫn còn nguyên.
+- Mode này dừng pipeline sau khi tạo hai nguồn và bỏ qua dịch/TTS. Người dùng ghép, hiệu chỉnh và dịch bằng Antigravity IDE, sau đó dùng **Import Translated SRT** để nạp bản SRT hoàn chỉnh rồi mới chạy **Generate Voice / TTS**.
+- Các artifact `subtitle_original_stt_srt` và `subtitle_original_ocr_srt` được lưu trong `project.json` và hiển thị trong **Processed Files**.
+
 ## 4. Luồng xử lý dữ liệu chi tiết (Detailed Pipeline Flow)
 
 ### Bước 1: Khởi tạo & Kiểm tra kết nối Colab
@@ -133,6 +148,9 @@ CAPCAP/
 2. Dịch thuật phụ đề:
    - Sử dụng các nhà cung cấp dịch thuật AI (Gemini AI Polisher hoặc Google Web Translate) để dịch các đoạn thoại sang ngôn ngữ đích.
    - Tối ưu hóa độ dài câu và lưu trạng thái vào `project.json`.
+3. Với mode **STT + OCR**:
+   - Pipeline lưu riêng `original_stt.srt` và `original_ocr.srt`, sau đó dừng để bàn giao cho trình biên tập SRT ngoài.
+   - Không gọi dịch tự động, không gọi TTS và không tự ghép hai nguồn.
 
 ### Bước 3: Lồng tiếng AI (AI Dubbing & Audio Mixing)
 1. `VoiceOverWorker` chạy ngầm:

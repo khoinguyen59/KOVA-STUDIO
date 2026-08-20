@@ -300,6 +300,23 @@ class PipelineController:
         self.progress_dialog.add_step("preview", "Preparing Video Preview")
         self.progress_dialog.show()
 
+    def required_colab_capabilities(self, target_stage="full", requires_separation=False):
+        """Return the complete Colab contract for the selected output mode.
+
+        Voice/Both projects must use the All-in-One notebook from their first
+        requested stage.  Do not defer the TTS capability check until after a
+        transcript has already been generated with the Whisper-only notebook.
+        """
+        requested_stage = str(target_stage or "full").strip().lower()
+        required = ["transcribe"]
+        if requested_stage != "transcript":
+            required.append("translate")
+        if requires_separation:
+            required.append("separate_vocals")
+        if self.gui.get_output_mode_key() in ("voice", "both"):
+            required.append("tts")
+        return tuple(required)
+
     def run_all_pipeline(self, video_path=None, requires_separation=None, target_stage="full"):
         """Entry point for the full generation process."""
         if video_path is None:
@@ -318,14 +335,17 @@ class PipelineController:
         if requires_separation is None:
             requires_separation = (self.gui.get_audio_handling_mode() == "clean")
 
-        requested_stage = str(target_stage or "full").strip().lower()
-        required_capabilities = ["transcribe"]
-        if requested_stage != "transcript":
-            required_capabilities.append("translate")
-        if requires_separation:
-            required_capabilities.append("separate_vocals")
-        if requested_stage == "full" and self.gui.get_output_mode_key() in ("voice", "both"):
-            required_capabilities.append("tts")
+        transcription_engine = self.gui.get_transcription_engine()
+        is_independent_stt_ocr = transcription_engine == "stt_ocr"
+        # This mode is an explicit hand-off to an external SRT editor. Even
+        # when Generate was clicked from a Voice/Both project, do not advance
+        # into translation or TTS before the user imports their finished SRT.
+        effective_target_stage = "transcript" if is_independent_stt_ocr else target_stage
+
+        required_capabilities = self.required_colab_capabilities(
+            target_stage=effective_target_stage,
+            requires_separation=requires_separation,
+        )
         if not self.gui.ensure_colab_connection("Generate", required_capabilities):
             return
 
@@ -336,7 +356,7 @@ class PipelineController:
         prepare_run_id = self.prepare_run_id
         self.gui._pipeline_active = True
         self.gui._pipeline_step = "prepare"
-        self.target_stage = str(target_stage or "full").strip().lower()
+        self.target_stage = str(effective_target_stage or "full").strip().lower()
         
         # UI Feedback
         if hasattr(self.gui, "run_all_btn"):
@@ -365,15 +385,22 @@ class PipelineController:
         self.local_worker_api_token = target_remote_token
         self._start_prepare_status_polling()
 
-        transcription_engine = self.gui.get_transcription_engine()
         # Transcript-only is a true stop point: PrepareWorkflow still
         # extracts audio and transcribes, but does not call translation.
-        skip_translation = self.gui.is_skip_translation() or self.target_stage == "transcript"
+        skip_translation = (
+            self.gui.is_skip_translation()
+            or self.target_stage == "transcript"
+            or is_independent_stt_ocr
+        )
         output_mode = self.gui.get_output_mode_key()
         # Prefetch voice audio only when Full Pipeline will immediately
         # continue into TTS. A Run to Translate stop point must not spend
         # resources creating cache entries the user may never need.
-        prefetch_tts = self.target_stage == "full" and output_mode in ("voice", "both")
+        prefetch_tts = (
+            self.target_stage == "full"
+            and not is_independent_stt_ocr
+            and output_mode in ("voice", "both")
+        )
         self.gui.prepare_workflow_thread = PrepareWorkflowWorker(
             self.gui.workspace_root,
             video_path,
@@ -435,6 +462,7 @@ class PipelineController:
             "separation": "Separating vocals",
             "diarization": "Detecting speakers",
             "transcription": "Transcribing audio",
+            "ocr": "Scanning video subtitles (OCR)",
             "translation": "Translating subtitles",
             "done": "Prepare complete",
             "error": "Prepare failed",
@@ -474,9 +502,20 @@ class PipelineController:
             # return the preview to its normal unobstructed state. The crop
             # geometry remains available through the OCR button for later
             # adjustment, and this does not affect OCR Translator overlays.
-            if self.gui.get_transcription_engine() == "ocr":
+            if self.gui.get_transcription_engine() in {"ocr", "stt_ocr"}:
                 self.gui.toggle_ocr_overlay_visibility(False)
                 self.gui.log("[OCR Region] Hidden after OCR transcription completed.")
+            if bool(getattr(state, "settings", {}).get("external_translation_required", False)):
+                stt_srt = state.artifacts.get("subtitle_original_stt_srt", "")
+                ocr_srt = state.artifacts.get("subtitle_original_ocr_srt", "")
+                message = (
+                    "Two independent subtitle sources are ready. No automatic merge or translation was run.\n\n"
+                    f"STT SRT:\n{stt_srt}\n\n"
+                    f"OCR SRT:\n{ocr_srt}\n\n"
+                    "Create the final translated SRT in Antigravity, then use Import Translated SRT before Generate Voice / TTS."
+                )
+                self.gui.log("[STT + OCR] Independent source SRT files are ready for external editing.")
+                QMessageBox.information(self.gui, "Independent STT + OCR SRT", message)
             self._notify_translation_fallback_if_used()
         except Exception as e:
             self.gui.log(f"[Pipeline] Error reloading state: {e}")

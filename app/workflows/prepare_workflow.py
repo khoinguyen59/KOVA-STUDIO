@@ -331,6 +331,12 @@ class PrepareWorkflow:
         if step_callback: step_callback("prepare")
         workflow_started = time.perf_counter()
         is_ocr = transcription_engine == "ocr"
+        is_stt_ocr = transcription_engine == "stt_ocr"
+        uses_ocr = is_ocr or is_stt_ocr
+        # The combined source deliberately ends after collecting its two
+        # independent SRT files.  It must never queue AI translation while
+        # Antigravity is the user-selected editing/translation step.
+        skip_translation = bool(skip_translation or is_stt_ocr)
         speaker_diarization = bool(speaker_diarization and not is_ocr)
         try:
             speaker_diarization_num_speakers = int(speaker_diarization_num_speakers)
@@ -347,9 +353,9 @@ class PrepareWorkflow:
         if not is_remote_profile():
             resource_service = ResourceDownloadService(self.workspace_root)
             readiness_issues = resource_service.validate_pipeline_runtime()
-            if is_ocr:
+            if uses_ocr:
                 readiness_issues.extend(resource_service.validate_ocr_runtime())
-            elif is_sensevoice:
+            if is_sensevoice:
                 readiness_issues.extend(resource_service.validate_sensevoice_runtime())
             if prefetch_voice_name:
                 readiness_issues.extend(
@@ -376,6 +382,7 @@ class PrepareWorkflow:
         whisper_model = str(whisper_model_name or "medium").strip() if not is_sensevoice else ""
         raw_segments = []
         segment_models = []
+        ocr_segment_models = []
         streamed_translation_executor = None
         streamed_translation_futures = []
         streamed_translation_enabled = False
@@ -393,6 +400,7 @@ class PrepareWorkflow:
             project_state.set_setting("whisper_model", whisper_model)
         project_state.set_setting("audio_handling_mode", audio_handling_mode)
         project_state.set_setting("transcription_engine", transcription_engine)
+        project_state.set_setting("external_translation_required", is_stt_ocr)
         project_state.set_setting("speaker_diarization_enabled", speaker_diarization)
         project_state.set_setting("speaker_diarization_num_speakers", speaker_diarization_num_speakers)
         self.project_service.save_project(project_state)
@@ -475,6 +483,8 @@ class PrepareWorkflow:
             self.project_service.save_project(project_state)
 
         srt_original_path = self.project_service.build_path(project_state, "subtitle", "original.srt")
+        srt_stt_path = self.project_service.build_path(project_state, "subtitle", "original_stt.srt")
+        srt_ocr_path = self.project_service.build_path(project_state, "subtitle", "original_ocr.srt")
         srt_translated_path = self.project_service.build_path(project_state, "subtitle", "subtitle.srt")
 
         if not is_ocr:
@@ -890,23 +900,119 @@ class PrepareWorkflow:
             project_state.set_step_status("transcribe", "done")
             self.project_service.save_project(project_state)
 
+            if is_stt_ocr:
+                # Preserve the STT source before scanning video frames. If
+                # OCR later finds no text, the usable STT SRT is still safely
+                # available to the user rather than being lost with the run.
+                print("\n--- Step 3a: Generating independent STT subtitle ---")
+                project_state.set_step_status("build_subtitle", "running")
+                self.engine_runtime.generate_srt(
+                    [segment.to_original_subtitle_dict() for segment in segment_models],
+                    srt_stt_path,
+                )
+                project_state.set_step_status("build_subtitle", "done")
+                project_state.set_artifact("subtitle_original_srt", srt_stt_path)
+                project_state.set_artifact("subtitle_original_stt_srt", srt_stt_path)
+                self.project_service.save_project(project_state)
+
+        if is_stt_ocr:
+            print("\n--- Step 2b: Extracting independent subtitles via OCR ---")
+            if step_callback:
+                step_callback("ocr")
+            project_state.set_step_status("transcribe_ocr", "running")
+            self.project_service.save_project(project_state)
+            ocr_started = time.perf_counter()
+            ocr_region = (os.getenv("OCR_SUBTITLE_REGION") or "bottom").strip().lower()
+            ocr_signature = self.project_service.build_ocr_transcription_signature(
+                video_path, region=ocr_region,
+            )
+            cached_ocr_signature = str(project_state.settings.get("ocr_transcription_signature", "") or "")
+            cached_raw_path = project_state.artifacts.get("ocr_transcript_raw", "")
+            cached_segment_path = project_state.artifacts.get("ocr_transcript_segments", "")
+            reused_ocr = (
+                cached_ocr_signature == ocr_signature
+                and cached_raw_path and cached_segment_path
+                and os.path.exists(cached_raw_path)
+                and os.path.exists(cached_segment_path)
+            )
+            if reused_ocr:
+                ocr_raw_segments = self.project_service.load_json_artifact(
+                    project_state, "ocr_transcript_raw", default=[]
+                )
+                ocr_segment_models = self.project_service.load_segment_artifact(
+                    project_state, "ocr_transcript_segments"
+                )
+                if not ocr_raw_segments and ocr_segment_models:
+                    ocr_raw_segments = [
+                        segment.to_original_subtitle_dict() for segment in ocr_segment_models
+                    ]
+                print("[Prepare Workflow] Reusing cached independent OCR transcript.")
+            else:
+                ocr_raw_segments = self.engine_runtime.transcribe_video_ocr(
+                    video_path, region=ocr_region
+                )
+                if not ocr_raw_segments:
+                    project_state.set_step_status("transcribe_ocr", "failed")
+                    self.project_service.save_project(project_state)
+                    raise RuntimeError(
+                        "STT source was saved, but OCR found no readable text in the selected "
+                        f"subtitle region ({ocr_region}). Change the OCR subtitle position and retry.\n"
+                        f"STT SRT: {srt_stt_path}"
+                    )
+                ocr_segment_models = self.segment_service.transcript_dicts_to_models(
+                    ocr_raw_segments
+                )
+                self.project_service.save_json_artifact(
+                    project_state,
+                    "ocr_transcript_raw",
+                    os.path.join("analysis", "ocr_transcript_raw.json"),
+                    ocr_raw_segments,
+                )
+                self.project_service.save_segment_artifact(
+                    project_state,
+                    "ocr_transcript_segments",
+                    os.path.join("analysis", "ocr_transcript_segments.json"),
+                    ocr_segment_models,
+                )
+                project_state.set_setting("ocr_transcription_signature", ocr_signature)
+            project_state.set_step_status("transcribe_ocr", "done")
+            self.project_service.save_project(project_state)
+            print(
+                "Success: Generated "
+                f"{len(ocr_segment_models)} independent OCR segments "
+                f"in {time.perf_counter() - ocr_started:.2f}s."
+            )
+
         print("\n--- Step 3: Generating Original Subtitle ---")
         subtitle_started = time.perf_counter()
         project_state.set_step_status("build_subtitle", "running")
         self.project_service.save_project(project_state)
-        self.engine_runtime.generate_srt(
-            [segment.to_original_subtitle_dict() for segment in segment_models],
-            srt_original_path,
-        )
+        if is_stt_ocr:
+            self.engine_runtime.generate_srt(
+                [segment.to_original_subtitle_dict() for segment in ocr_segment_models],
+                srt_ocr_path,
+            )
+        else:
+            self.engine_runtime.generate_srt(
+                [segment.to_original_subtitle_dict() for segment in segment_models],
+                srt_original_path,
+            )
         subtitle_elapsed = time.perf_counter() - subtitle_started
         print(f"[Timing] Build original subtitle: {subtitle_elapsed:.2f}s")
         project_state.set_step_status("build_subtitle", "done")
-        project_state.set_artifact("subtitle_original_srt", srt_original_path)
+        if is_stt_ocr:
+            project_state.set_artifact("subtitle_original_stt_srt", srt_stt_path)
+            project_state.set_artifact("subtitle_original_ocr_srt", srt_ocr_path)
+        else:
+            project_state.set_artifact("subtitle_original_srt", srt_original_path)
         self.project_service.save_project(project_state)
 
 
         if skip_translation:
-            print("\n--- Step 4: Translation skipped (keep original text) ---")
+            if is_stt_ocr:
+                print("\n--- Step 4: Translation skipped (external SRT workflow) ---")
+            else:
+                print("\n--- Step 4: Translation skipped (keep original text) ---")
             project_state.set_step_status("translate_raw", "skipped")
             project_state.set_step_status("refine_translation", "skipped")
             self.project_service.save_project(project_state)
@@ -1075,6 +1181,14 @@ class PrepareWorkflow:
                         tts_prefetch_executor.shutdown(wait=True)
             translate_elapsed = time.perf_counter() - translate_started
             print(f"[Timing] Translate/refine: {translate_elapsed:.2f}s")
+
+        if is_stt_ocr:
+            workflow_elapsed = time.perf_counter() - workflow_started
+            print("\nCOMPLETED! Independent STT and OCR SRT files are ready for external editing.")
+            print(f"[Timing] Prepare workflow total: {workflow_elapsed:.2f}s")
+            print(f"[STT SRT] {srt_stt_path}")
+            print(f"[OCR SRT] {srt_ocr_path}")
+            return project_state
 
         print("\n--- Step 5: Generating Vietnamese Subtitle ---")
         translated_subtitle_started = time.perf_counter()

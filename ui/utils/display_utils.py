@@ -1,5 +1,6 @@
 import os
 
+import os
 import sys
 
 from PySide6.QtCore import QUrl
@@ -81,6 +82,8 @@ def show_processed_files(gui):
     lines.append(fmt("Vocals", gui.processed_artifacts.get("vocals") or gui.last_vocals_path))
     lines.append(fmt("Music (no_vocals)", gui.processed_artifacts.get("music") or gui.last_music_path))
     lines.append(fmt("Original SRT", gui.processed_artifacts.get("srt_original") or gui.last_original_srt_path))
+    lines.append(fmt("Independent STT SRT", gui.processed_artifacts.get("subtitle_original_stt_srt")))
+    lines.append(fmt("Independent OCR SRT", gui.processed_artifacts.get("subtitle_original_ocr_srt")))
     lines.append(fmt("Translated SRT", gui.processed_artifacts.get("srt_translated") or gui.last_translated_srt_path))
     lines.append(fmt("Vietnamese Voice (TTS)", gui.processed_artifacts.get("voice_vi") or gui.last_voice_vi_path))
     lines.append(fmt("Mixed Audio (BG + VI Voice)", gui.processed_artifacts.get("mixed_vi") or gui.last_mixed_vi_path))

@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QColorDialog, QTabWidget, QDialog, QSizePolicy, QInputDialog, QLayout)
 from PySide6.QtCore import Qt, QUrl, QTimer, QSettings, QEvent, Signal, QPoint, QRect
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontInfo, QIcon, QKeySequence, QPixmap, QTextCursor
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontDatabase, QFontInfo, QIcon, QKeySequence, QPixmap, QTextCursor
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 APP_PATH = os.path.join(os.path.dirname(__file__), '..', 'app')
@@ -1219,12 +1219,12 @@ class VideoTranslatorGUI(QMainWindow):
         state = getattr(self, "current_project_state", None)
         settings = getattr(state, "settings", {}) if state is not None else {}
         value = str(settings.get("transcription_engine", "") or "").strip().lower()
-        return value if value in {"whisper", "sensevoice", "ocr"} else _default_asr_engine()
+        return value if value in {"whisper", "sensevoice", "ocr", "stt_ocr"} else _default_asr_engine()
 
     def set_project_transcription_engine(self, engine: str) -> None:
         """Apply a project-local source choice and clear incompatible range state."""
         engine = str(engine or "").strip().lower()
-        if engine not in {"whisper", "sensevoice", "ocr"}:
+        if engine not in {"whisper", "sensevoice", "ocr", "stt_ocr"}:
             engine = _default_asr_engine()
         previous = self.get_transcription_engine()
         os.environ["TRANSCRIPTION_ENGINE"] = engine
@@ -1236,7 +1236,7 @@ class VideoTranslatorGUI(QMainWindow):
             # A new OCR project needs the crop editor immediately. Existing
             # projects with completed OCR remain unobstructed until the user
             # explicitly reopens the region tool.
-            if engine == "ocr" and not self.current_segments and not self.transcript_text.toPlainText().strip():
+            if engine in {"ocr", "stt_ocr"} and not self.current_segments and not self.transcript_text.toPlainText().strip():
                 self._ocr_overlay_visible = True
             timeline = getattr(self, "timeline", None)
             if timeline is not None:
@@ -4167,7 +4167,7 @@ class VideoTranslatorGUI(QMainWindow):
             or (hasattr(self, "transcript_text") and self.transcript_text.toPlainText().strip())
         )
         if not bool(getattr(self, "_alternate_ocr_range_pending", None)):
-            self._ocr_overlay_visible = project_engine == "ocr" and not has_transcript
+            self._ocr_overlay_visible = project_engine in {"ocr", "stt_ocr"} and not has_transcript
         self._update_ocr_overlay()
         # Clear any stale layer selection from the previous project so
         # the inspector does not stay pinned to a track that no longer
@@ -4442,7 +4442,7 @@ class VideoTranslatorGUI(QMainWindow):
             self._update_ocr_overlay()
             if (
                 bool(getattr(self, "_filter_preview_ocr_was_editable", False))
-                and os.getenv("TRANSCRIPTION_ENGINE", _default_asr_engine()).strip().lower() == "ocr"
+                and os.getenv("TRANSCRIPTION_ENGINE", _default_asr_engine()).strip().lower() in {"ocr", "stt_ocr"}
             ):
                 overlay.set_editable(True)
                 overlay.sync_to_view()
@@ -4478,7 +4478,7 @@ class VideoTranslatorGUI(QMainWindow):
         overlay = getattr(self, "ocr_region_overlay", None)
         if overlay is None:
             return
-        is_ocr = os.getenv("TRANSCRIPTION_ENGINE", _default_asr_engine()).strip().lower() == "ocr"
+        is_ocr = os.getenv("TRANSCRIPTION_ENGINE", _default_asr_engine()).strip().lower() in {"ocr", "stt_ocr"}
         alternate_ocr_active = bool(getattr(self, "_alternate_ocr_range_pending", None))
         btn = getattr(self, "ocr_region_btn", None)
         if btn:
@@ -12891,7 +12891,21 @@ class VideoTranslatorGUI(QMainWindow):
         self.refresh_ui_state()
 
     def run_transcription(self):
-        is_ocr = self.get_transcription_engine() == "ocr"
+        engine = self.get_transcription_engine()
+        if engine == "stt_ocr":
+            # This source intentionally produces two independent files.  The
+            # prepare workflow is the only path that can safely coordinate
+            # remote STT with video OCR without falling back to local Whisper.
+            if not self.ensure_required_resources(
+                "STT + OCR source generation",
+                include_whisper=True,
+                include_ocr=True,
+                validate_pipeline_runtime=True,
+            ):
+                return
+            self.pipeline_controller.run_all_pipeline(target_stage="transcript")
+            return
+        is_ocr = engine == "ocr"
         if not self.ensure_required_resources(
             "Transcription",
             include_whisper=not is_ocr,
@@ -13089,6 +13103,7 @@ class VideoTranslatorGUI(QMainWindow):
         engine_combo.addItem("Audio (SenseVoice) - Speed", "sensevoice")
         engine_combo.addItem("Audio (Whisper) - Quality", "whisper")
         engine_combo.addItem("Video (OCR)", "ocr")
+        engine_combo.addItem("Audio STT + Video OCR (two separate SRT files)", "stt_ocr")
         current_engine = self.get_transcription_engine()
         idx = engine_combo.findData(current_engine)
         if idx >= 0:
@@ -13097,7 +13112,7 @@ class VideoTranslatorGUI(QMainWindow):
 
         # OCR Region combo (only visible when OCR selected)
         region_label = QLabel("Subtitle position:")
-        region_label.setVisible(current_engine == "ocr")
+        region_label.setVisible(current_engine in {"ocr", "stt_ocr"})
         region_combo = QComboBox(dialog)
         region_combo.addItem("Bottom (default)", "bottom")
         region_combo.addItem("Top", "top")
@@ -13106,13 +13121,13 @@ class VideoTranslatorGUI(QMainWindow):
         idx = region_combo.findData(current_region)
         if idx >= 0:
             region_combo.setCurrentIndex(idx)
-        region_combo.setVisible(current_engine == "ocr")
+        region_combo.setVisible(current_engine in {"ocr", "stt_ocr"})
         layout.addWidget(region_label)
         layout.addWidget(region_combo)
 
         sampling_label = QLabel("OCR sampling rate:")
         sampling_label.setToolTip("Higher rates catch shorter subtitle flashes but process more video frames.")
-        sampling_label.setVisible(current_engine == "ocr")
+        sampling_label.setVisible(current_engine in {"ocr", "stt_ocr"})
         sampling_combo = QComboBox(dialog)
         sampling_combo.addItem("Auto (recommended)", "auto")
         sampling_combo.addItem("1 FPS (lighter)", "1")
@@ -13123,12 +13138,12 @@ class VideoTranslatorGUI(QMainWindow):
         current_sampling_fps = str(os.getenv("OCR_SAMPLING_FPS") or "auto").strip().lower()
         idx = sampling_combo.findData(current_sampling_fps)
         sampling_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        sampling_combo.setVisible(current_engine == "ocr")
+        sampling_combo.setVisible(current_engine in {"ocr", "stt_ocr"})
         layout.addWidget(sampling_label)
         layout.addWidget(sampling_combo)
 
         # Whisper Section
-        is_whisper = current_engine == "whisper"
+        is_whisper = current_engine in {"whisper", "stt_ocr"}
         whisper_title = QLabel("Whisper model")
         whisper_title.setObjectName("statusHeadline")
         whisper_title.setVisible(is_whisper)
@@ -13188,6 +13203,8 @@ class VideoTranslatorGUI(QMainWindow):
         test_remote_btn = QPushButton("Test Connection", dialog)
         open_colab_btn = QPushButton("Mở Colab", dialog)
         open_notebooks_folder_btn = QPushButton("File Notebook (.ipynb)", dialog)
+        open_colab_btn.setText("All-in-One Colab")
+        open_notebooks_folder_btn.setText("All-in-One Notebook (.ipynb)")
         remote_actions_layout.addWidget(test_remote_btn)
         remote_actions_layout.addWidget(open_colab_btn)
         remote_actions_layout.addWidget(open_notebooks_folder_btn)
@@ -13196,7 +13213,10 @@ class VideoTranslatorGUI(QMainWindow):
 
         def _open_colab_link():
             import webbrowser
-            webbrowser.open("https://colab.research.google.com/github/khoinguyen59/KOVA-STUDIO/blob/main/colab/CapCap_Whisper_Colab.ipynb")
+            webbrowser.open(
+                "https://colab.research.google.com/github/khoinguyen59/KOVA-STUDIO/blob/main/"
+                "colab/CapCap_All_in_One_Colab.ipynb"
+            )
             
         def _open_notebooks_folder():
             colab_dir = os.path.abspath(os.path.join(self.workspace_root, "colab"))
@@ -13207,8 +13227,21 @@ class VideoTranslatorGUI(QMainWindow):
             else:
                 QMessageBox.information(dialog, "Colab", f"Thư mục colab tại: {colab_dir}")
 
+        def _open_all_in_one_notebook():
+            notebook_name = "CapCap_All_in_One_Colab.ipynb"
+            candidates = [
+                os.path.abspath(os.path.join(self.workspace_root, "colab", notebook_name)),
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "colab", notebook_name)),
+            ]
+            notebook_path = next((path for path in candidates if os.path.isfile(path)), "")
+            if not notebook_path:
+                QMessageBox.information(dialog, "Colab", "CapCap All-in-One notebook was not found.")
+                return
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(notebook_path)):
+                QMessageBox.warning(dialog, "Colab", f"Could not open notebook: {notebook_path}")
+
         open_colab_btn.clicked.connect(_open_colab_link)
-        open_notebooks_folder_btn.clicked.connect(_open_notebooks_folder)
+        open_notebooks_folder_btn.clicked.connect(_open_all_in_one_notebook)
 
         remote_hint_label = QLabel(
             "Nhập URL và Token từ Colab để sử dụng GPU miễn phí cho tính năng nặng. (Chỉ áp dụng khi bạn chạy file Colab)"
@@ -13401,8 +13434,8 @@ class VideoTranslatorGUI(QMainWindow):
 
         def update_engine_fields():
             engine_val = engine_combo.currentData()
-            is_ocr = engine_val == "ocr"
-            is_whisper = engine_val == "whisper"
+            is_ocr = engine_val in {"ocr", "stt_ocr"}
+            is_whisper = engine_val in {"whisper", "stt_ocr"}
             _toggle_visible(whisper_title, is_whisper)
             _toggle_visible(whisper_combo, is_whisper)
             _toggle_visible(region_label, is_ocr)
@@ -14037,6 +14070,11 @@ class VideoTranslatorGUI(QMainWindow):
         existing = getattr(self, "voice_thread", None)
         if existing and existing.isRunning():
             return
+        # Validate TTS before showing a new pipeline dialog. This prevents a
+        # Whisper-only notebook from completing subtitles and failing only
+        # after the UI has advanced to the Voiceover stage.
+        if not self.ensure_colab_connection("Voice generation", ("tts",)):
+            return
         self._pipeline_active = True
         self._pipeline_step = "voiceover"
         self.pipeline_controller.target_stage = str(target_stage or "full")
@@ -14077,6 +14115,12 @@ class VideoTranslatorGUI(QMainWindow):
             # signature changes.
             if not self.transcript_text.toPlainText().strip() and self.current_segments:
                 self.transcript_text.setText(self.format_to_srt(self.current_segments))
+            required_capabilities = self.pipeline_controller.required_colab_capabilities(
+                target_stage="translate",
+                requires_separation=(self.get_audio_handling_mode() == "clean"),
+            )
+            if not self.ensure_colab_connection("Translate", required_capabilities):
+                return
             self.log("[Pipeline] Translate requested; using the completed transcript only.")
             self.run_translation()
             return
@@ -14089,11 +14133,12 @@ class VideoTranslatorGUI(QMainWindow):
         mode = self.get_output_mode_key()
         include_voice = target_stage == "tts" and mode in ("voice", "both")
         is_ocr = self.get_transcription_engine() == "ocr"
+        uses_ocr = self.get_transcription_engine() in {"ocr", "stt_ocr"}
         if not self.ensure_required_resources(
             "Generate",
             include_whisper=not is_ocr,
             include_voice=include_voice,
-            include_ocr=is_ocr,
+            include_ocr=uses_ocr,
             validate_pipeline_runtime=True,
         ):
             return
@@ -14119,11 +14164,12 @@ class VideoTranslatorGUI(QMainWindow):
         mode = self.get_output_mode_key()
         include_voice = mode in ("voice", "both")
         is_ocr = self.get_transcription_engine() == "ocr"
+        uses_ocr = self.get_transcription_engine() in {"ocr", "stt_ocr"}
         if not self.ensure_required_resources(
             "Generate",
             include_whisper=not is_ocr,
             include_voice=include_voice,
-            include_ocr=is_ocr,
+            include_ocr=uses_ocr,
             validate_pipeline_runtime=True,
         ):
             return

@@ -79,6 +79,20 @@ def _validate_notebooks_and_onefile_spec() -> None:
     assert "set \"RELEASE_DIR=%PROJECT_ROOT%release\"" in build_script
     assert "--distpath \"%RELEASE_DIR%\"" in build_script
     assert "%RELEASE_DIR%\\CapCap.exe" in build_script
+
+    desktop_settings = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8-sig")
+    assert "CapCap_All_in_One_Colab.ipynb" in desktop_settings
+    assert "CapCap_Whisper_Colab.ipynb" not in desktop_settings
+    assert "All-in-One Colab" in desktop_settings
+
+    prepare_source = (ROOT / "app" / "workflows" / "prepare_workflow.py").read_text(encoding="utf-8-sig")
+    manual_subtitle_source = (ROOT / "ui" / "controllers" / "subtitle_controller.py").read_text(encoding="utf-8-sig")
+    preview_source = (ROOT / "ui" / "controllers" / "preview_controller.py").read_text(encoding="utf-8-sig")
+    assert 'build_path(project_state, "subtitle", "original.srt")' in prepare_source
+    assert 'build_path(state, "subtitle", "original.srt")' in manual_subtitle_source
+    assert "separate_vocals(audio_output_path" in prepare_source
+    assert "_resolve_preview_background_audio_path" in preview_source
+    assert "mix_original_with_dub(" in preview_source
     print("[OK] Notebook JSON/code and one-file packaging contract validated.")
 
 
@@ -121,6 +135,132 @@ def _verify_qthread_result_lifecycle() -> None:
     assert results == [("contract", [], 0.0, "")]
     assert native_finished == [True]
     print("[OK] QThread result/native-finished lifecycle validated.")
+
+
+def _verify_all_in_one_colab_preflight() -> None:
+    """Voice projects must reject a Whisper-only server before work begins."""
+    ui_root = ROOT / "ui"
+    if str(ui_root) not in sys.path:
+        sys.path.insert(0, str(ui_root))
+    from ui.controllers.pipeline_controller import PipelineController
+
+    class _CapabilityGui:
+        def __init__(self, mode: str):
+            self.mode = mode
+
+        def get_output_mode_key(self) -> str:
+            return self.mode
+
+    subtitle = PipelineController(_CapabilityGui("subtitle"))
+    voice = PipelineController(_CapabilityGui("voice"))
+    both = PipelineController(_CapabilityGui("both"))
+    assert subtitle.required_colab_capabilities("transcript") == ("transcribe",)
+    assert voice.required_colab_capabilities("transcript") == ("transcribe", "tts")
+    assert both.required_colab_capabilities("translate", True) == (
+        "transcribe", "translate", "separate_vocals", "tts"
+    )
+
+    main_window_source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8-sig")
+    voiceover_section = main_window_source.split("def run_voiceover_with_progress", 1)[1].split(
+        "def run_pipeline_to_stage", 1
+    )[0]
+    assert 'ensure_colab_connection("Voice generation", ("tts",))' in voiceover_section
+    print("[OK] Voice/Both flows require the All-in-One Colab capability set before work starts.")
+
+
+def _verify_independent_stt_ocr_sources() -> None:
+    """The external-editor workflow must keep STT and OCR SRTs separate."""
+    prepare_source = (APP_ROOT / "workflows" / "prepare_workflow.py").read_text(encoding="utf-8-sig")
+    pipeline_source = (ROOT / "ui" / "controllers" / "pipeline_controller.py").read_text(encoding="utf-8-sig")
+    main_window_source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8-sig")
+    display_source = (ROOT / "ui" / "utils" / "display_utils.py").read_text(encoding="utf-8-sig")
+
+    assert 'is_stt_ocr = transcription_engine == "stt_ocr"' in prepare_source
+    assert "skip_translation = bool(skip_translation or is_stt_ocr)" in prepare_source
+    assert '"original_stt.srt"' in prepare_source
+    assert '"original_ocr.srt"' in prepare_source
+    assert '"subtitle_original_stt_srt"' in prepare_source
+    assert '"subtitle_original_ocr_srt"' in prepare_source
+    assert "self.engine_runtime.transcribe_video_ocr(" in prepare_source
+    assert "if is_stt_ocr:" in prepare_source
+    assert "return project_state" in prepare_source
+
+    assert 'is_independent_stt_ocr = transcription_engine == "stt_ocr"' in pipeline_source
+    assert 'effective_target_stage = "transcript" if is_independent_stt_ocr else target_stage' in pipeline_source
+    assert "No automatic merge or translation was run." in pipeline_source
+    assert '"stt_ocr"' in main_window_source
+    assert "Import Translated Subtitle" in main_window_source
+    assert "Independent STT SRT" in display_source
+    assert "Independent OCR SRT" in display_source
+    print("[OK] Independent STT/OCR source SRT workflow and external-import hand-off validated.")
+
+
+def _exercise_independent_stt_ocr_workflow() -> None:
+    """Run the dual-source branch with fake engines, never real AI workloads."""
+    from workflows.prepare_workflow import PrepareWorkflow
+
+    class _DualSourceRuntime:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def extract_audio(self, _video_path: str, audio_path: str) -> bool:
+            Path(audio_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(audio_path).write_bytes(b"fake-audio")
+            return True
+
+        def transcribe_audio(self, _audio_path: str, _model: str, *, language: str):
+            self.calls.append(f"stt:{language}")
+            return [{"start": 0.0, "end": 1.0, "text": "spoken source"}]
+
+        def transcribe_video_ocr(self, _video_path: str, *, region: str):
+            self.calls.append(f"ocr:{region}")
+            return [{"start": 0.1, "end": 1.1, "text": "visible text"}]
+
+        def generate_srt(self, segments, output_path: str) -> str:
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            text = "\n".join(str(segment.get("text", "")) for segment in segments)
+            Path(output_path).write_text(text, encoding="utf-8")
+            return output_path
+
+    previous_env = {
+        key: os.environ.get(key)
+        for key in ("CAPCAP_RUNTIME_PROFILE", "CAPCAP_REMOTE_API_URL", "CAPCAP_REMOTE_API_TOKEN")
+    }
+    try:
+        os.environ["CAPCAP_RUNTIME_PROFILE"] = "remote"
+        os.environ["CAPCAP_REMOTE_API_URL"] = "http://contract.invalid"
+        os.environ["CAPCAP_REMOTE_API_TOKEN"] = "contract-token"
+        with tempfile.TemporaryDirectory(prefix="capcap_dual_sources_") as temp_dir:
+            video_path = Path(temp_dir) / "input.mp4"
+            video_path.write_bytes(b"fake-video")
+            workflow = PrepareWorkflow(temp_dir)
+            fake_runtime = _DualSourceRuntime()
+            workflow.engine_runtime = fake_runtime
+            workflow._prepare_asr_working_audio = lambda audio_path, _state: audio_path
+            workflow.chunking_service.probe_wav_duration = lambda _audio_path: 1.0
+
+            state = workflow.run(
+                str(video_path),
+                mode="voice",
+                transcription_engine="stt_ocr",
+                source_language="en",
+                skip_translation=False,
+            )
+            stt_path = Path(state.artifacts["subtitle_original_stt_srt"])
+            ocr_path = Path(state.artifacts["subtitle_original_ocr_srt"])
+            assert fake_runtime.calls == ["stt:en", "ocr:bottom"]
+            assert stt_path.is_file() and stt_path.read_text(encoding="utf-8") == "spoken source"
+            assert ocr_path.is_file() and ocr_path.read_text(encoding="utf-8") == "visible text"
+            assert state.artifacts.get("subtitle_translated_srt", "") == ""
+            assert state.steps.get("translate_raw") == "skipped"
+            assert state.settings.get("external_translation_required") is True
+        print("[OK] Dual STT/OCR workflow produced two source SRTs without translation or TTS.")
+    finally:
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 class _FakeColabHandler(BaseHTTPRequestHandler):
@@ -307,6 +447,9 @@ def main() -> None:
     _parse_all_project_python()
     _validate_notebooks_and_onefile_spec()
     _verify_qthread_result_lifecycle()
+    _verify_all_in_one_colab_preflight()
+    _verify_independent_stt_ocr_sources()
+    _exercise_independent_stt_ocr_workflow()
     _exercise_remote_adapters()
     _verify_remote_server_forces_local_profile()
     if "--smoke-exe" in sys.argv:

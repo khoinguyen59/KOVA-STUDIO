@@ -23,6 +23,12 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 | **13** | Lỗi 404 Not Found khi gọi `/v1/prepare` | Tích hợp Colab | Nghiêm trọng | Đã fix triệt để |
 | **14** | Lỗi 500 Internal Server Error khi gọi `/v1/transcribe` | Tích hợp Colab | Nghiêm trọng | Đã fix triệt để |
 | **15** | Server Colab tự gọi lại API remote và tách giọng chạy CPU local | Định tuyến AI/Colab | Rất nghiêm trọng | Đã fix triệt để |
+| **20** | Ứng dụng văng Qt6Core sau khi hoàn tất pipeline hoặc tạo waveform | Vòng đời QThread/đóng gói | Rất nghiêm trọng | Đã fix triệt để |
+| **21** | Yêu cầu Colab All-in-One chỉ được báo sau khi đã hoàn tất phụ đề | Kiểm tra capability | Nghiêm trọng | Đã fix triệt để |
+| **22** | Setup Colab vẫn mở notebook Whisper-only | Cấu hình notebook | Nghiêm trọng | Đã fix triệt để |
+| **23** | SRT gốc từ nút Transcription chỉ nằm trong thư mục tạm | Lưu trữ dự án | Trung bình | Đã fix triệt để |
+| **24** | Không thể lấy đồng thời nguồn STT và OCR độc lập | Luồng tạo phụ đề | Trung bình | Đã fix triệt để |
+| **25** | Processed Files có thể lỗi khi kiểm tra đường dẫn artifact | Hiển thị artifact | Nhẹ | Đã fix triệt để |
 
 ---
 
@@ -235,3 +241,48 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Nguyên nhân gốc rễ (Root Cause):** Nhiều lớp `QThread` khai báo Signal kết quả tên `finished`, che khuất Signal vòng đời gốc `QThread.finished`. Callback kết quả sau đó giải phóng tham chiếu worker trước khi native thread thực sự kết thúc, dẫn tới lỗi bộ nhớ trong Qt. Môi trường build cũng có NumPy hỏng/thiếu DLL OpenBLAS, nên EXE không thể nạp NumPy cho waveform.
 * **Cách xử lý (Fix Details):** Đổi toàn bộ Signal kết quả của worker sang `result_ready`; chỉ dùng `QThread.finished` gốc để giữ tham chiếu và hủy worker sau khi thread dừng. Bổ sung đóng gói bắt buộc các DLL NumPy/`numpy.libs` và kiểm tra import NumPy ngay khi build. Thêm test tự động kiểm tra không được che khuất `QThread.finished` và chạy worker waveform tối giản đến khi native thread kết thúc.
 * **File liên quan:** [`ui/worker_adapters/processing_workers.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/worker_adapters/processing_workers.py), [`ui/worker_adapters/preview_workers.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/worker_adapters/preview_workers.py), [`ui/main_window.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/main_window.py), [`ui/controllers/pipeline_controller.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/controllers/pipeline_controller.py), [`ui/controllers/preview_controller.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/controllers/preview_controller.py), [`ui/controllers/subtitle_controller.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/controllers/subtitle_controller.py), [`CapCap.spec`](file:///C:/NTKhoi/Downloads/CAPCAP/CapCap.spec), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
+
+---
+
+### 21. Yêu cầu Colab All-in-One chỉ được báo sau khi đã hoàn tất phụ đề
+* **Thời gian:** 21/08/2026
+* **Mô tả hiện tượng:** Người dùng có thể chạy bước Transcript bằng notebook Whisper-only, sau đó khi chuyển sang tạo voice mới nhận thông báo thiếu capability `tts`. Hộp thoại xuất hiện khi Progress Dialog đã sang Stage 2/3, tạo cảm giác phải chạy hai notebook.
+* **Nguyên nhân gốc rễ (Root Cause):** `PipelineController` chỉ thêm capability `tts` khi `target_stage` là `full`; các luồng chạy theo bước và luồng tiếp tục Voice kiểm tra TTS quá muộn.
+* **Cách xử lý (Fix Details):** Tập trung xác định capability vào `required_colab_capabilities`. Với mode Voice/Both, `tts` luôn là yêu cầu ngay cả khi bắt đầu từ Transcript hoặc Translate; mode Clean kiểm tra thêm `separate_vocals`. Trước khi mở Progress Dialog TTS, ứng dụng kiểm tra `tts` ngay lập tức.
+* **File liên quan:** [`ui/controllers/pipeline_controller.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/controllers/pipeline_controller.py), [`ui/main_window.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/main_window.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
+
+---
+
+### 22. Setup Colab vẫn mở notebook Whisper-only
+* **Thời gian:** 21/08/2026
+* **Mô tả hiện tượng:** Hai nút trong Settings có thể dẫn người dùng tới notebook Whisper-only, nên server chỉ có `transcribe` và thất bại ở TTS.
+* **Nguyên nhân gốc rễ (Root Cause):** URL hard-code trỏ tới `CapCap_Whisper_Colab.ipynb`; nút mở file lại mở toàn bộ thư mục Colab.
+* **Cách xử lý (Fix Details):** Cả hai nút nay chỉ mở `CapCap_All_in_One_Colab.ipynb`: một nút mở Colab trên GitHub, một nút mở trực tiếp đúng file cục bộ. Test contract chặn mọi tham chiếu UI về notebook Whisper-only.
+* **File liên quan:** [`ui/main_window.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/main_window.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
+
+---
+
+### 23. SRT gốc từ nút Transcription chỉ nằm trong thư mục tạm
+* **Thời gian:** 21/08/2026
+* **Mô tả hiện tượng:** SRT gốc tạo bằng pipeline đã có vị trí cố định, nhưng SRT từ nút Transcription thủ công lại được lưu trong thư mục tạm theo tên video, khó tìm để dịch bằng IDE ngoài.
+* **Nguyên nhân gốc rễ (Root Cause):** `SubtitleController` dùng `get_project_temp_dir("subtitle")` thay vì thư mục subtitle chính thức của ProjectService.
+* **Cách xử lý (Fix Details):** Cả pipeline và nút Transcription giờ dùng một đường dẫn chuẩn: `projects/<project-id>/subtitle/original.srt`. File được ghi trong artifact của project, hiển thị trong Processed Files và có thể mở trực tiếp bằng Antigravity IDE.
+* **File liên quan:** [`app/workflows/prepare_workflow.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/workflows/prepare_workflow.py), [`ui/controllers/subtitle_controller.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/controllers/subtitle_controller.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
+
+---
+
+### 24. Không thể lấy đồng thời nguồn STT và OCR độc lập
+* **Thời gian:** 21/08/2026
+* **Mô tả hiện tượng:** Người dùng phải chọn hoặc Audio STT hoặc Video OCR. Không có cách xuất riêng hai file nguồn để chỉnh sửa/dịch bằng Antigravity IDE trước bước TTS.
+* **Nguyên nhân gốc rễ (Root Cause):** `PrepareWorkflow` coi `ocr` là một nhánh thay thế hoàn toàn cho ASR, chỉ duy trì một artifact SRT gốc và pipeline tiếp tục dịch/TTS theo output mode hiện tại.
+* **Cách xử lý (Fix Details):** Thêm source mode `stt_ocr`. Luồng này gọi STT audio qua Colab, lưu `projects/<project-id>/subtitle/original_stt.srt`, sau đó chạy OCR video và lưu `projects/<project-id>/subtitle/original_ocr.srt`. Hai file không tự ghép hoặc tự dịch; pipeline bắt buộc dừng sau bước nguồn. Người dùng nhập SRT hoàn chỉnh qua **Import Translated SRT** trước khi chạy TTS. Nếu OCR không nhận được chữ, SRT STT đã tạo vẫn được giữ lại và đường dẫn được báo trong lỗi.
+* **File liên quan:** [`app/workflows/prepare_workflow.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/workflows/prepare_workflow.py), [`ui/controllers/pipeline_controller.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/controllers/pipeline_controller.py), [`ui/main_window.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/main_window.py), [`ui/utils/display_utils.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/utils/display_utils.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
+
+---
+
+### 25. Processed Files có thể lỗi khi kiểm tra đường dẫn artifact
+* **Thời gian:** 21/08/2026
+* **Mô tả hiện tượng:** Khi mở **Processed Files**, giao diện có thể lỗi tại bước xác nhận file tồn tại, khiến các đường dẫn SRT mới không được hiển thị.
+* **Nguyên nhân gốc rễ (Root Cause):** `ui/utils/display_utils.py` gọi `os.path.exists()` nhưng không import module `os` rõ ràng.
+* **Cách xử lý (Fix Details):** Import `os` tường minh và hiển thị thêm hai artifact `Independent STT SRT` và `Independent OCR SRT` trong hộp thoại Processed Files.
+* **File liên quan:** [`ui/utils/display_utils.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/utils/display_utils.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).

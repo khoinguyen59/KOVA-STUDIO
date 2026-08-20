@@ -123,9 +123,16 @@ class SubtitleController:
         video_path = self.gui.video_path_edit.text()
         if video_path:
             file_basename = os.path.splitext(os.path.basename(video_path))[0]
-            out_folder = self.gui.get_project_temp_dir("subtitle")
-            os.makedirs(out_folder, exist_ok=True)
-            out_path = os.path.join(out_folder, file_basename + "_original.srt")
+            state = self.gui.ensure_current_project()
+            if state is not None:
+                # Keep a predictable, user-editable source subtitle for
+                # external translation tools such as Antigravity IDE.
+                out_path = self.gui.project_service.build_path(state, "subtitle", "original.srt")
+            else:
+                out_folder = self.gui.get_project_temp_dir("subtitle")
+                os.makedirs(out_folder, exist_ok=True)
+                out_path = os.path.join(out_folder, file_basename + "_original.srt")
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
             from subtitle_builder import generate_srt
 
             generate_srt(segments, out_path)
