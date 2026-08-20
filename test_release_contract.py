@@ -219,6 +219,7 @@ def _smoke_test_frozen_exe() -> None:
     executable = ROOT / "release" / "CapCap.exe"
     assert executable.is_file(), f"Missing one-file release executable: {executable}"
     env = os.environ.copy()
+    env["CAPCAP_HEADLESS"] = "1"
     env["QT_QPA_PLATFORM"] = "offscreen"
     startup_info = None
     if os.name == "nt":
@@ -240,7 +241,18 @@ def _smoke_test_frozen_exe() -> None:
         print("[OK] One-file CapCap.exe started successfully in headless smoke mode.")
     finally:
         if process.poll() is None:
-            process.terminate()
+            if os.name == "nt":
+                # One-file PyInstaller starts a parent bootloader and a child
+                # GUI process. Terminating only the parent leaves the child
+                # alive and its single-instance mutex blocks later launches.
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                process.terminate()
             try:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:

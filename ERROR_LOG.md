@@ -208,3 +208,21 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Nguyên nhân gốc rễ (Root Cause):** `CapCap.spec` đã bỏ `COLLECT` để chuyển sang one-file nhưng vẫn giữ `exclude_binaries=True`. Cờ này chỉ phù hợp với mô hình one-folder (binaries sẽ do `COLLECT` đóng gói), nên EXE one-file không thể hoàn tất assembly.
 * **Cách xử lý (Fix Details):** Bỏ `exclude_binaries=True` để `EXE` nhúng `a.binaries`, `a.zipfiles` và `a.datas` thành một executable duy nhất.
 * **File liên quan:** [`CapCap.spec`](file:///C:/NTKhoi/Downloads/CAPCAP/CapCap.spec), [`build_final_clean.bat`](file:///C:/NTKhoi/Downloads/CAPCAP/build_final_clean.bat).
+
+---
+
+### 18. EXE chạy nhưng không hiển thị cửa sổ
+* **Thời gian:** 20/08/2026
+* **Mô tả hiện tượng:** Mở `CapCap.exe` tạo tiến trình nhưng không thấy launcher hoặc cửa sổ giao diện.
+* **Nguyên nhân gốc rễ (Root Cause):** Qt có thể kế thừa `QT_QPA_PLATFORM=offscreen` từ luồng test/export trước khi `QApplication` khởi tạo. Khi đó ứng dụng vẫn chạy nhưng không tạo cửa sổ Windows hiển thị.
+* **Cách xử lý (Fix Details):** Entry point của EXE ép Qt dùng platform `windows`; chỉ cho phép `offscreen` khi cờ rõ ràng `CAPCAP_HEADLESS=1` được đặt bởi smoke test.
+* **File liên quan:** [`ui/gui.py`](file:///C:/NTKhoi/Downloads/CAPCAP/ui/gui.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
+
+---
+
+### 19. Smoke test one-file để lại child process và khóa single-instance
+* **Thời gian:** 20/08/2026
+* **Mô tả hiện tượng:** Sau smoke test headless, mở EXE desktop lần tiếp theo không tạo cửa sổ vì còn một tiến trình CapCap ẩn.
+* **Nguyên nhân gốc rễ (Root Cause):** EXE one-file của PyInstaller chạy theo parent bootloader và child GUI. `process.terminate()` chỉ đóng parent, để child giữ mutex `CapCap.SingleInstance`.
+* **Cách xử lý (Fix Details):** Smoke test trên Windows dùng `taskkill /T /F` trên parent PID để kết thúc trọn cây tiến trình trước khi trả về.
+* **File liên quan:** [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).

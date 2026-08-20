@@ -1,8 +1,17 @@
 import os
+import os
 import shutil
 import sys
 import threading
 import traceback
+
+# A frozen desktop executable must create native Windows windows.  Some
+# headless test/export code can set QT_QPA_PLATFORM=offscreen; without an
+# explicit desktop policy that value is inherited before QApplication exists,
+# leaving CapCap running with no visible window.  CAPCAP_HEADLESS is the
+# deliberate opt-in used only by automated/headless runs.
+if getattr(sys, "frozen", False) and str(os.getenv("CAPCAP_HEADLESS", "") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+    os.environ["QT_QPA_PLATFORM"] = "windows"
 
 # Always ensure ephemeral Colab credentials start completely empty for every app session.
 # AI processing remains remote-only; the pipeline opens the Colab settings when
