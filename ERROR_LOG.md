@@ -33,6 +33,7 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 | **27** | Subtitle/TTS lấy nguyên đoạn Whisper dài và chồng timeline | ASR/Subtitle | Rất nghiêm trọng | Đã fix triệt để |
 | **28** | Retry TTS cho cue dài bị vô hiệu hóa | TTS/Timing | Nghiêm trọng | Đã fix triệt để |
 | **29** | Smoke test EXE để lại dữ liệu giải nén làm đầy ổ C | Đóng gói/QA | Nghiêm trọng | Đã fix triệt để |
+| **30** | Colab Cleaner voice thiếu model UVR | Tách giọng/Colab | Rất nghiêm trọng | Đã fix triệt để |
 
 ---
 
@@ -237,7 +238,6 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Cách xử lý (Fix Details):** Smoke test trên Windows dùng `taskkill /T /F` trên parent PID để kết thúc trọn cây tiến trình trước khi trả về.
 * **File liên quan:** [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
 
----
 
 ### 20. Ứng dụng văng Qt6Core sau khi hoàn tất pipeline hoặc tạo waveform
 * **Thời gian:** 20/08/2026
@@ -329,3 +329,12 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Nguyên nhân gốc rễ (Root Cause):** Smoke test cũ dùng `%TEMP%` của người dùng và dừng cây process PyInstaller bằng `taskkill`; thao tác ép dừng có thể không kịp để bootloader xóa `_MEI` extraction tree. Test chỉ kiểm tra process còn sống, không xác nhận DLL MPV thật sự đã giải nén đầy đủ.
 * **Cách xử lý (Fix Details):** Smoke test nay dùng thư mục tạm riêng qua biến `TEMP`/`TMP`, kiểm tra còn tối thiểu 1,5 GB trước khi chạy, xác minh `libmpv-2.dll` đã giải nén đủ ít nhất 100 MiB, rồi retry dọn toàn bộ thư mục tạm cô lập sau khi dừng process và Windows nhả DLL handle. Gate này chặn cả trường hợp thiếu dung lượng lẫn extraction không hoàn chỉnh mà không để lại rác trong Temp của người dùng.
 * **File liên quan:** [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
+
+---
+
+### 30. Colab Cleaner voice thiếu model UVR
+* **Thời gian:** 22/08/2026
+* **Mô tả hiện tượng:** Full Pipeline dừng ở Stage 1 khi chọn **Cleaner voice (remove original voice)**, với lỗi `ONNX model not found: /content/KOVA-STUDIO/bin/UVR-MDX-NET-Inst_HQ_3.onnx`.
+* **Nguyên nhân gốc rễ (Root Cause):** `vocal_processor.py` nạp model UVR `UVR-MDX-NET-Inst_HQ_3.onnx` theo yêu cầu lúc gọi endpoint tách giọng, nhưng notebook All-in-One chỉ clone source và cài Python dependencies; model ONNX không nằm trong Git repository cũng không được notebook provision. Health check vẫn báo đủ capability nên lỗi chỉ lộ ra giữa pipeline.
+* **Cách xử lý (Fix Details):** Notebook All-in-One nay tự tải model vào đúng `bin/` của Colab trước khi khởi động server, tải qua file tạm, xác minh SHA-256 rồi mới thay thế file đích. Regression contract kiểm tra notebook vẫn chứa model URL, checksum và bước verify để ngăn tái diễn.
+* **File liên quan:** [`colab/CapCap_All_in_One_Colab.ipynb`](file:///C:/NTKhoi/Downloads/CAPCAP/colab/CapCap_All_in_One_Colab.ipynb), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py), [`ERROR_LOG.md`](file:///C:/NTKhoi/Downloads/CAPCAP/ERROR_LOG.md).

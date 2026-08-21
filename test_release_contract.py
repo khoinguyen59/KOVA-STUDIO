@@ -56,6 +56,10 @@ def _validate_notebooks_and_onefile_spec() -> None:
     assert 'env_vars["CAPCAP_RUNTIME_PROFILE"] = "local"' in all_source
     assert 'env_vars["CAPCAP_DEVICE"] = "cuda"' in all_source
     assert 'env_vars.pop("CAPCAP_REMOTE_API_URL", None)' in all_source
+    assert 'UVR-MDX-NET-Inst_HQ_3.onnx' in all_source
+    assert 'models/MDXNet/UVR-MDX-NET-Inst_HQ_3.onnx?download=true' in all_source
+    assert '317554b07fe1ea5279a77f2b1520a41ea4b93432560c4ffd08792c30fddf9adc' in all_source
+    assert 'sha256_file(download_path)' in all_source
     assert '"capabilities": ["transcribe"]' in whisper_source
     assert "Mở file `.env`" not in whisper_source
 
