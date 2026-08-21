@@ -31,6 +31,7 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 | **25** | Processed Files có thể lỗi khi kiểm tra đường dẫn artifact | Hiển thị artifact | Nhẹ | Đã fix triệt để |
 | **26** | Colab TTS tạo track im lặng nhưng pipeline vẫn export | TTS/Export | Rất nghiêm trọng | Đã fix triệt để |
 | **27** | Subtitle/TTS lấy nguyên đoạn Whisper dài và chồng timeline | ASR/Subtitle | Rất nghiêm trọng | Đã fix triệt để |
+| **28** | Retry TTS cho cue dài bị vô hiệu hóa | TTS/Timing | Nghiêm trọng | Đã fix triệt để |
 
 ---
 
@@ -309,3 +310,12 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Nguyên nhân gốc rễ (Root Cause):** `SegmentService` chỉ chuyển thẳng từng recognition segment của Whisper thành một `Segment`. Dữ liệu word timestamp chính xác đã có nhưng không được dùng để tách cue trước khi tạo SRT, dịch và TTS. Một token lỗi còn có thể mang duration rất dài.
 * **Cách xử lý (Fix Details):** Thêm bước chuẩn hóa cue ASR trước khi ghi artifact/dịch: tách theo word timestamp, khoảng lặng, dấu câu, giới hạn 5.25 giây/36 ký tự và cắt các token có duration bất thường. Timeline được chuẩn hóa không chồng nhau; cue mới được dùng đồng nhất cho SRT gốc, bản dịch, TTS và Timeline. Chữ đã cháy trực tiếp trong video nguồn vẫn là pixel của video; nó có thể được che bằng mask nếu người dùng chọn, không phải subtitle track có thể xóa riêng.
 * **File liên quan:** [`app/services/segment_service.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/services/segment_service.py), [`app/workflows/prepare_workflow.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/workflows/prepare_workflow.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
+
+---
+
+### 28. Retry TTS cho cue dài bị vô hiệu hóa
+* **Thời gian:** 21/08/2026
+* **Mô tả hiện tượng:** Khi một WAV TTS dài hơn window của subtitle, pipeline không gọi lại TTS với câu rút gọn. Điều này làm câu thoại có thể tràn qua cue kế tiếp dù bộ luật nén lời thoại đã tồn tại.
+* **Nguyên nhân gốc rễ (Root Cause):** `VoiceWorkflow._retry_overlong_segments()` trả về `updated_wavs` ngay đầu hàm. Toàn bộ vòng lặp retry phía dưới trở thành unreachable; đồng thời biến đếm retry chưa được khởi tạo nếu nhánh này được kích hoạt lại.
+* **Cách xử lý (Fix Details):** Bỏ `return` sớm, khởi tạo `retry_count = 0` trước vòng lặp, và đưa retry vào cùng khối xử lý lỗi của bước synth gốc để lỗi Colab khi synth lại cũng đánh dấu `generate_tts` thất bại và chặn export. Thêm regression test tạo WAV 2 giây trong cue 1 giây, xác nhận hệ thống thực sự gọi TTS retry, chọn WAV 0.95 giây và lưu metadata `retry_applied`.
+* **File liên quan:** [`app/workflows/voice_workflow.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/workflows/voice_workflow.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).

@@ -909,7 +909,7 @@ class VoiceWorkflow:
         on_progress: callable = None,
     ):
         updated_wavs = list(wavs or [])
-        return updated_wavs
+        retry_count = 0
         for idx, seg in enumerate(list(segments or [])):
             wav_path = updated_wavs[idx] if idx < len(updated_wavs) else ""
             if not wav_path or not os.path.exists(wav_path):
@@ -1769,21 +1769,21 @@ class VoiceWorkflow:
                 voice_provider=voice_provider,
                 on_progress=on_progress,
             )
+            wavs = self._retry_overlong_segments(
+                segments=segments,
+                wavs=wavs,
+                tmp_dir=tmp_dir,
+                voice_name=voice_name,
+                provider_speed=provider_speed,
+                voice_provider=voice_provider,
+                ai_rewrite_dubbing=bool(ai_rewrite_dubbing),
+                source_language=source_language,
+                style_instruction=dubbing_style_instruction,
+                on_progress=on_progress,
+            )
         except Exception:
             self._mark_failed(state, with_background=bool(background_path))
             raise
-        wavs = self._retry_overlong_segments(
-            segments=segments,
-            wavs=wavs,
-            tmp_dir=tmp_dir,
-            voice_name=voice_name,
-            provider_speed=provider_speed,
-            voice_provider=voice_provider,
-            ai_rewrite_dubbing=bool(ai_rewrite_dubbing),
-            source_language=source_language,
-            style_instruction=dubbing_style_instruction,
-            on_progress=on_progress,
-        )
         self._update_manifest_entries(
             tmp_dir=tmp_dir,
             segments=segments,

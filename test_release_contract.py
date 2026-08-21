@@ -323,7 +323,56 @@ def _verify_timed_cues_and_tts_failure_guard() -> None:
             assert "No silent placeholder" in str(exc)
         else:
             raise AssertionError("Silent TTS output must fail instead of reaching export.")
-    print("[OK] Long ASR segments split into non-overlapping cues; silent TTS blocks export.")
+
+    class _RetryTtsRuntime:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def synthesize_segment(self, *, text: str, wav_path: str, **_kwargs):
+            self.calls.append(text)
+            with wave.open(wav_path, "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(16000)
+                # A non-silent 0.95-second candidate: close enough to a one
+                # second cue and therefore preferable to the 2-second input.
+                handle.writeframes((b"\x00\x20" * int(16000 * 0.95)))
+            return wav_path
+
+    with tempfile.TemporaryDirectory(prefix="capcap_tts_retry_guard_") as temp_dir:
+        initial_wav = Path(temp_dir) / "seg_0000_base.wav"
+        with wave.open(str(initial_wav), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(16000)
+            handle.writeframes(b"\x00\x20" * int(16000 * 2.0))
+
+        retry_runtime = _RetryTtsRuntime()
+        workflow = VoiceWorkflow(temp_dir)
+        workflow.engine_runtime = retry_runtime
+        workflow._voice_provider = lambda _voice_name: "edge"
+        segments = [{
+            "start": 0.0,
+            "end": 1.0,
+            "text": "mot hai ba bon nam sau bay tam chin muoi muoi mot muoi hai",
+            "source_text": "mot hai ba bon nam sau bay tam chin muoi muoi mot muoi hai",
+            "tts_text": "mot hai ba bon nam sau bay tam chin muoi muoi mot muoi hai",
+            "_tts_metrics": {"max_words_vi": 4, "speech_cost": 0, "retry_cap": 2},
+        }]
+        retried_wavs = workflow._retry_overlong_segments(
+            segments=segments,
+            wavs=[str(initial_wav)],
+            tmp_dir=temp_dir,
+            voice_name="edge:vi-VN-HoaiMyNeural",
+            provider_speed=1.0,
+            voice_provider="edge",
+        )
+        assert retry_runtime.calls, "An overlong TTS cue must trigger a retry synthesis."
+        assert retried_wavs[0] != str(initial_wav)
+        assert workflow._probe_wav_duration_seconds(retried_wavs[0]) < 1.0
+        assert segments[0]["_tts_metrics"]["retry_applied"] is True
+
+    print("[OK] Long ASR segments split into non-overlapping cues; silent TTS blocks export; overlong TTS retries.")
 
 
 class _FakeColabHandler(BaseHTTPRequestHandler):
