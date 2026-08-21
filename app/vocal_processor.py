@@ -46,6 +46,15 @@ def _get_session():
             raise RuntimeError(
                 "CUDAExecutionProvider is unavailable. Vocal separation requires the Colab GPU runtime."
             )
+        # Importing PyTorch in the server process preloads the CUDA 12/cuDNN
+        # libraries shipped with the Colab image before ORT loads its provider.
+        # This must happen here, not only in the notebook launcher process.
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                raise RuntimeError("PyTorch CUDA is unavailable in the Colab server process.")
+        except ImportError as exc:
+            raise RuntimeError("PyTorch is required to preload Colab CUDA libraries for UVR.") from exc
         _ONNX_SESSION = ort.InferenceSession(path, providers=["CUDAExecutionProvider"])
         if "CUDAExecutionProvider" not in _ONNX_SESSION.get_providers():
             raise RuntimeError("Vocal separation could not start with CUDAExecutionProvider.")

@@ -7,7 +7,9 @@ huggingface_hub
 faster-whisper
 vietnormalizer
 piper-tts
-onnxruntime-gpu
+# Colab L4 currently provides CUDA 12.x.  ONNX Runtime >= 1.27 defaults to a
+# CUDA 13 build and cannot load there (missing libcublasLt.so.13).
+onnxruntime-gpu==1.26.0
 scipy
 openai
 librosa

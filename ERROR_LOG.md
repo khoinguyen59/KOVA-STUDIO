@@ -35,6 +35,7 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 | **29** | Smoke test EXE để lại dữ liệu giải nén làm đầy ổ C | Đóng gói/QA | Nghiêm trọng | Đã fix triệt để |
 | **30** | Colab Cleaner voice thiếu model UVR | Tách giọng/Colab | Rất nghiêm trọng | Đã fix triệt để |
 | **31** | Colab nạp ONNX Runtime CPU thay vì CUDA cho UVR | Tách giọng/Colab GPU | Rất nghiêm trọng | Đã fix triệt để |
+| **32** | Colab L4 nhận ONNX Runtime CUDA 13 không tương thích | Tách giọng/Colab GPU | Rất nghiêm trọng | Đang xử lý |
 
 ---
 
@@ -348,3 +349,12 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Nguyên nhân gốc rễ (Root Cause):** Colab base image có thể đã chứa distribution `onnxruntime` CPU. Các dependency OCR cài sau package GPU có thể giữ package Python CPU này ở import path, dù `requirements-local.txt` đã khai báo `onnxruntime-gpu`. Server chỉ phát hiện khi thực hiện tách giọng thật.
 * **Cách xử lý (Fix Details):** Sau khi cài dependencies, notebook gỡ distribution CPU, force-reinstall `onnxruntime-gpu` không cache, import lại module và assert `CUDAExecutionProvider` trước khi server khởi động. Như vậy mọi runtime thiếu GPU sẽ fail sớm tại notebook thay vì hỏng giữa pipeline; contract test kiểm tra bước provision và assertion này.
 * **File liên quan:** [`colab/CapCap_All_in_One_Colab.ipynb`](file:///C:/NTKhoi/Downloads/CAPCAP/colab/CapCap_All_in_One_Colab.ipynb), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py), [`ERROR_LOG.md`](file:///C:/NTKhoi/Downloads/CAPCAP/ERROR_LOG.md).
+
+---
+
+### 32. Colab L4 nhận ONNX Runtime CUDA 13 không tương thích
+* **Thời gian:** 22/08/2026
+* **Mô tả hiện tượng:** Notebook đã tải đúng model UVR và health-check báo capability `separate_vocals`, nhưng request tách giọng thật vẫn dừng với `Vocal separation could not start with CUDAExecutionProvider.`
+* **Nguyên nhân gốc rễ (Root Cause):** Lệnh `pip install --upgrade onnxruntime-gpu` lấy bản GPU mới nhất. Bản này yêu cầu CUDA 13 (`libcublasLt.so.13`), trong khi runtime Colab L4 đang cung cấp CUDA 12 (`libcublasLt.so.12`). `ort.get_available_providers()` vẫn liệt kê CUDA nên kiểm tra cũ không phát hiện được trước khi tạo session.
+* **Cách thức đã xử lý (Fix Details):** Đang pin wheel ONNX Runtime CUDA 12, preload CUDA bằng PyTorch trong process server, và thêm preflight tạo session UVR ở process tách biệt trước khi server công bố endpoint. Test live L4 sẽ xác nhận sau khi notebook cập nhật.
+* **File liên quan:** [`requirements-local.txt`](file:///C:/NTKhoi/Downloads/CAPCAP/requirements-local.txt), [`colab/CapCap_All_in_One_Colab.ipynb`](file:///C:/NTKhoi/Downloads/CAPCAP/colab/CapCap_All_in_One_Colab.ipynb), [`app/vocal_processor.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/vocal_processor.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py), [`ERROR_LOG.md`](file:///C:/NTKhoi/Downloads/CAPCAP/ERROR_LOG.md).
