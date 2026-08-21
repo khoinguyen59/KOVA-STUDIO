@@ -34,6 +34,7 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 | **28** | Retry TTS cho cue dài bị vô hiệu hóa | TTS/Timing | Nghiêm trọng | Đã fix triệt để |
 | **29** | Smoke test EXE để lại dữ liệu giải nén làm đầy ổ C | Đóng gói/QA | Nghiêm trọng | Đã fix triệt để |
 | **30** | Colab Cleaner voice thiếu model UVR | Tách giọng/Colab | Rất nghiêm trọng | Đã fix triệt để |
+| **31** | Colab nạp ONNX Runtime CPU thay vì CUDA cho UVR | Tách giọng/Colab GPU | Rất nghiêm trọng | Đã fix triệt để |
 
 ---
 
@@ -337,4 +338,13 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Mô tả hiện tượng:** Full Pipeline dừng ở Stage 1 khi chọn **Cleaner voice (remove original voice)**, với lỗi `ONNX model not found: /content/KOVA-STUDIO/bin/UVR-MDX-NET-Inst_HQ_3.onnx`.
 * **Nguyên nhân gốc rễ (Root Cause):** `vocal_processor.py` nạp model UVR `UVR-MDX-NET-Inst_HQ_3.onnx` theo yêu cầu lúc gọi endpoint tách giọng, nhưng notebook All-in-One chỉ clone source và cài Python dependencies; model ONNX không nằm trong Git repository cũng không được notebook provision. Health check vẫn báo đủ capability nên lỗi chỉ lộ ra giữa pipeline.
 * **Cách xử lý (Fix Details):** Notebook All-in-One nay tự tải model vào đúng `bin/` của Colab trước khi khởi động server, tải qua file tạm, xác minh SHA-256 rồi mới thay thế file đích. Regression contract kiểm tra notebook vẫn chứa model URL, checksum và bước verify để ngăn tái diễn.
+* **File liên quan:** [`colab/CapCap_All_in_One_Colab.ipynb`](file:///C:/NTKhoi/Downloads/CAPCAP/colab/CapCap_All_in_One_Colab.ipynb), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py), [`ERROR_LOG.md`](file:///C:/NTKhoi/Downloads/CAPCAP/ERROR_LOG.md).
+
+---
+
+### 31. Colab nạp ONNX Runtime CPU thay vì CUDA cho UVR
+* **Thời gian:** 22/08/2026
+* **Mô tả hiện tượng:** Sau khi model UVR đã có trong Colab T4, endpoint `/v1/separate-vocals` vẫn trả HTTP 500: `CUDAExecutionProvider is unavailable. Vocal separation requires the Colab GPU runtime.`
+* **Nguyên nhân gốc rễ (Root Cause):** Colab base image có thể đã chứa distribution `onnxruntime` CPU. Các dependency OCR cài sau package GPU có thể giữ package Python CPU này ở import path, dù `requirements-local.txt` đã khai báo `onnxruntime-gpu`. Server chỉ phát hiện khi thực hiện tách giọng thật.
+* **Cách xử lý (Fix Details):** Sau khi cài dependencies, notebook gỡ distribution CPU, force-reinstall `onnxruntime-gpu` không cache, import lại module và assert `CUDAExecutionProvider` trước khi server khởi động. Như vậy mọi runtime thiếu GPU sẽ fail sớm tại notebook thay vì hỏng giữa pipeline; contract test kiểm tra bước provision và assertion này.
 * **File liên quan:** [`colab/CapCap_All_in_One_Colab.ipynb`](file:///C:/NTKhoi/Downloads/CAPCAP/colab/CapCap_All_in_One_Colab.ipynb), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py), [`ERROR_LOG.md`](file:///C:/NTKhoi/Downloads/CAPCAP/ERROR_LOG.md).

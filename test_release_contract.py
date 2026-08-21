@@ -60,6 +60,9 @@ def _validate_notebooks_and_onefile_spec() -> None:
     assert 'models/MDXNet/UVR-MDX-NET-Inst_HQ_3.onnx?download=true' in all_source
     assert '317554b07fe1ea5279a77f2b1520a41ea4b93432560c4ffd08792c30fddf9adc' in all_source
     assert 'sha256_file(download_path)' in all_source
+    assert '"onnxruntime-gpu"' in all_source
+    assert '"CUDAExecutionProvider" in providers' in all_source
+    assert '"pip", "uninstall", "-y", "onnxruntime"' in all_source
     assert '"capabilities": ["transcribe"]' in whisper_source
     assert "Mở file `.env`" not in whisper_source
 
