@@ -32,6 +32,7 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 | **26** | Colab TTS tạo track im lặng nhưng pipeline vẫn export | TTS/Export | Rất nghiêm trọng | Đã fix triệt để |
 | **27** | Subtitle/TTS lấy nguyên đoạn Whisper dài và chồng timeline | ASR/Subtitle | Rất nghiêm trọng | Đã fix triệt để |
 | **28** | Retry TTS cho cue dài bị vô hiệu hóa | TTS/Timing | Nghiêm trọng | Đã fix triệt để |
+| **29** | Smoke test EXE để lại dữ liệu giải nén làm đầy ổ C | Đóng gói/QA | Nghiêm trọng | Đã fix triệt để |
 
 ---
 
@@ -319,3 +320,12 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Nguyên nhân gốc rễ (Root Cause):** `VoiceWorkflow._retry_overlong_segments()` trả về `updated_wavs` ngay đầu hàm. Toàn bộ vòng lặp retry phía dưới trở thành unreachable; đồng thời biến đếm retry chưa được khởi tạo nếu nhánh này được kích hoạt lại.
 * **Cách xử lý (Fix Details):** Bỏ `return` sớm, khởi tạo `retry_count = 0` trước vòng lặp, và đưa retry vào cùng khối xử lý lỗi của bước synth gốc để lỗi Colab khi synth lại cũng đánh dấu `generate_tts` thất bại và chặn export. Thêm regression test tạo WAV 2 giây trong cue 1 giây, xác nhận hệ thống thực sự gọi TTS retry, chọn WAV 0.95 giây và lưu metadata `retry_applied`.
 * **File liên quan:** [`app/workflows/voice_workflow.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/workflows/voice_workflow.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).
+
+---
+
+### 29. Smoke test EXE để lại dữ liệu giải nén làm đầy ổ C
+* **Thời gian:** 21/08/2026
+* **Mô tả hiện tượng:** Sau các smoke test one-file, `%TEMP%` còn lại nhiều thư mục `_MEI...` lớn. Khi ổ C hết chỗ, lần mở `CapCap.exe` tiếp theo thất bại ngay tại bootloader với thông báo không giải nén được `bin\\mpv\\libmpv-2.dll`.
+* **Nguyên nhân gốc rễ (Root Cause):** Smoke test cũ dùng `%TEMP%` của người dùng và dừng cây process PyInstaller bằng `taskkill`; thao tác ép dừng có thể không kịp để bootloader xóa `_MEI` extraction tree. Test chỉ kiểm tra process còn sống, không xác nhận DLL MPV thật sự đã giải nén đầy đủ.
+* **Cách xử lý (Fix Details):** Smoke test nay dùng thư mục tạm riêng qua biến `TEMP`/`TMP`, kiểm tra còn tối thiểu 1,5 GB trước khi chạy, xác minh `libmpv-2.dll` đã giải nén đủ ít nhất 100 MiB, rồi retry dọn toàn bộ thư mục tạm cô lập sau khi dừng process và Windows nhả DLL handle. Gate này chặn cả trường hợp thiếu dung lượng lẫn extraction không hoàn chỉnh mà không để lại rác trong Temp của người dùng.
+* **File liên quan:** [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py).

@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import ast
 import base64
+import inspect
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
@@ -509,50 +511,100 @@ def _verify_remote_server_forces_local_profile() -> None:
                 process.wait(timeout=5)
 
 
+def _remove_tree_with_retry(path: str, *, timeout_seconds: float = 12.0) -> None:
+    """Remove a PyInstaller extraction tree after Windows releases its DLL handles."""
+    deadline = time.monotonic() + timeout_seconds
+    last_error: OSError | None = None
+    while Path(path).exists():
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as exc:
+            last_error = exc
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.25)
+    if Path(path).exists():
+        raise AssertionError(f"Could not remove isolated frozen-EXE temp directory: {path}") from last_error
+
+
 def _smoke_test_frozen_exe() -> None:
-    """Assert that the one-file executable can extract and keep its Qt app alive."""
+    """Verify one-file extraction, MPV availability, startup, and temp cleanup."""
     executable = ROOT / "release" / "CapCap.exe"
     assert executable.is_file(), f"Missing one-file release executable: {executable}"
-    env = os.environ.copy()
-    env["CAPCAP_HEADLESS"] = "1"
-    env["QT_QPA_PLATFORM"] = "offscreen"
     startup_info = None
     if os.name == "nt":
         startup_info = subprocess.STARTUPINFO()
         startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startup_info.wShowWindow = 0
-    process = subprocess.Popen(
-        [str(executable)],
-        cwd=str(executable.parent),
-        env=env,
-        startupinfo=startup_info,
-    )
+    minimum_free_bytes = int(os.environ.get("CAPCAP_FROZEN_MIN_FREE_BYTES", str(1_500_000_000)))
+
+    extraction_root = tempfile.mkdtemp(prefix="capcap_frozen_extraction_")
     try:
-        deadline = time.monotonic() + 25
-        while time.monotonic() < deadline and process.poll() is None:
-            time.sleep(0.5)
-        if process.poll() is not None:
-            raise AssertionError(f"CapCap.exe stopped during startup with exit code {process.returncode}.")
-        print("[OK] One-file CapCap.exe started successfully in headless smoke mode.")
+        available_bytes = shutil.disk_usage(extraction_root).free
+        assert available_bytes >= minimum_free_bytes, (
+            "Insufficient free space for a one-file CapCap smoke test: "
+            f"need at least {minimum_free_bytes:,} bytes, found {available_bytes:,}."
+        )
+
+        env = os.environ.copy()
+        env["CAPCAP_HEADLESS"] = "1"
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        # PyInstaller reads TEMP/TMP before app code runs. Isolating them makes
+        # the test verify actual extraction without leaving _MEI folders in the
+        # user's normal Temp directory when the one-file process tree is ended.
+        env["TEMP"] = extraction_root
+        env["TMP"] = extraction_root
+        process = subprocess.Popen([str(executable)], cwd=str(executable.parent), env=env, startupinfo=startup_info)
+        try:
+            deadline = time.monotonic() + 25
+            while time.monotonic() < deadline and process.poll() is None:
+                time.sleep(0.5)
+            if process.poll() is not None:
+                raise AssertionError(f"CapCap.exe stopped during startup with exit code {process.returncode}.")
+
+            extracted_mpv = list(Path(extraction_root).glob("_MEI*/bin/mpv/libmpv-2.dll"))
+            assert len(extracted_mpv) == 1, "CapCap.exe did not extract the bundled MPV DLL."
+            mpv_size = extracted_mpv[0].stat().st_size
+            assert mpv_size >= 100 * 1024 * 1024, (
+                f"Extracted MPV DLL is incomplete: expected >= 100 MiB, found {mpv_size:,} bytes."
+            )
+            print("[OK] One-file CapCap.exe extracted MPV and started successfully in isolated headless smoke mode.")
+        finally:
+            if process.poll() is None:
+                if os.name == "nt":
+                    # One-file PyInstaller starts a parent bootloader and a child
+                    # GUI process. End the whole tree before the test removes
+                    # its isolated _MEI extraction folder.
+                    subprocess.run(
+                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                else:
+                    process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
     finally:
-        if process.poll() is None:
-            if os.name == "nt":
-                # One-file PyInstaller starts a parent bootloader and a child
-                # GUI process. Terminating only the parent leaves the child
-                # alive and its single-instance mutex blocks later launches.
-                subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-            else:
-                process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+        _remove_tree_with_retry(extraction_root)
+
+
+def _verify_frozen_exe_smoke_hygiene_contract() -> None:
+    """Keep the one-file smoke test from leaking large PyInstaller temp trees."""
+    source = inspect.getsource(_smoke_test_frozen_exe)
+    module_source = Path(__file__).read_text(encoding="utf-8-sig")
+    assert "def _remove_tree_with_retry" in module_source
+    assert 'mkdtemp(prefix="capcap_frozen_extraction_")' in source
+    assert 'env["TEMP"] = extraction_root' in source
+    assert 'env["TMP"] = extraction_root' in source
+    assert 'glob("_MEI*/bin/mpv/libmpv-2.dll")' in source
+    assert "CAPCAP_FROZEN_MIN_FREE_BYTES" in source
+    assert "_remove_tree_with_retry(extraction_root)" in source
+    print("[OK] Frozen-EXE smoke test contract requires isolated extraction and MPV verification.")
 
 
 def main() -> None:
@@ -565,6 +617,7 @@ def main() -> None:
     _verify_timed_cues_and_tts_failure_guard()
     _exercise_remote_adapters()
     _verify_remote_server_forces_local_profile()
+    _verify_frozen_exe_smoke_hygiene_contract()
     if "--smoke-exe" in sys.argv:
         _smoke_test_frozen_exe()
     print("ALL RELEASE CONTRACT CHECKS PASSED")
