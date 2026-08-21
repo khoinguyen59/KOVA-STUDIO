@@ -358,3 +358,12 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Nguyên nhân gốc rễ (Root Cause):** Lệnh `pip install --upgrade onnxruntime-gpu` lấy bản GPU mới nhất. Bản này yêu cầu CUDA 13 (`libcublasLt.so.13`), trong khi runtime Colab L4 đang cung cấp CUDA 12 (`libcublasLt.so.12`). `ort.get_available_providers()` vẫn liệt kê CUDA nên kiểm tra cũ không phát hiện được trước khi tạo session.
 * **Cách thức đã xử lý (Fix Details):** Đang pin wheel ONNX Runtime CUDA 12, preload CUDA bằng PyTorch trong process server, và thêm preflight tạo session UVR ở process tách biệt trước khi server công bố endpoint. Test live L4 sẽ xác nhận sau khi notebook cập nhật.
 * **File liên quan:** [`requirements-local.txt`](file:///C:/NTKhoi/Downloads/CAPCAP/requirements-local.txt), [`colab/CapCap_All_in_One_Colab.ipynb`](file:///C:/NTKhoi/Downloads/CAPCAP/colab/CapCap_All_in_One_Colab.ipynb), [`app/vocal_processor.py`](file:///C:/NTKhoi/Downloads/CAPCAP/app/vocal_processor.py), [`test_release_contract.py`](file:///C:/NTKhoi/Downloads/CAPCAP/test_release_contract.py), [`ERROR_LOG.md`](file:///C:/NTKhoi/Downloads/CAPCAP/ERROR_LOG.md).
+
+---
+
+### 33. Cue ASR only contains an invalid character and breaks one TTS segment
+* **Time:** 22/08/2026
+* **Symptom:** The L4 Full Pipeline generated 102 of 139 TTS WAV files, then stopped at subtitle segment 103 with `TTS failed for 1/139 subtitle segment(s)`.
+* **Root Cause:** Segment 103 is a 0.05-second ASR noise cue containing only Unicode replacement character `U+FFFD`. It is not speakable but was sent to the remote TTS provider.
+* **Fix Details:** `VoiceWorkflow._segment_tts_text()` now removes replacement/control characters and skips a cue when no letter or number remains. The visual subtitle timeline is preserved, no silent placeholder is created, and the invalid noise cue cannot block export.
+* **Related Files:** `app/workflows/voice_workflow.py`, `ERROR_LOG.md`.

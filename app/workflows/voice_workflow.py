@@ -3,6 +3,7 @@ import audioop
 import os
 import re
 import time
+import unicodedata
 import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -223,10 +224,26 @@ class VoiceWorkflow:
         return voice_provider(voice_name)
 
     def _segment_tts_text(self, seg: dict) -> str:
+        def _speakable(value: object) -> str:
+            """Return text that can safely be sent to a speech provider.
+
+            ASR can occasionally emit an isolated replacement character for a
+            near-zero-duration noise cue.  That is not pronounceable text and
+            remote TTS providers correctly reject it.  Treat such cues like an
+            empty subtitle: retain them visually, but do not create an audio
+            segment for them.
+            """
+            text = " ".join(str(value or "").replace("\ufffd", " ").split()).strip()
+            text = "".join(char for char in text if not unicodedata.category(char).startswith("C"))
+            text = " ".join(text.split()).strip()
+            if not any(unicodedata.category(char).startswith(("L", "N")) for char in text):
+                return ""
+            return text
+
         current = dict(seg or {})
-        subtitle_text = str(current.get("text") or "").strip()
+        subtitle_text = _speakable(current.get("text"))
         if bool(current.get("voice_edited")):
-            edited_text = str(current.get("tts_text") or current.get("dubbing_vi") or "").strip()
+            edited_text = _speakable(current.get("tts_text") or current.get("dubbing_vi"))
             if edited_text:
                 return edited_text
         return subtitle_text
