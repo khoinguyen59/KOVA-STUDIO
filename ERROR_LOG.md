@@ -367,3 +367,4 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Root Cause:** Segment 103 is a 0.05-second ASR noise cue containing only Unicode replacement character `U+FFFD`. It is not speakable but was sent to the remote TTS provider.
 * **Fix Details:** `VoiceWorkflow._segment_tts_text()` now removes replacement/control characters and skips a cue when no letter or number remains. The visual subtitle timeline is preserved, no silent placeholder is created, and the invalid noise cue cannot block export.
 * **Related Files:** `app/workflows/voice_workflow.py`, `ERROR_LOG.md`.
+* **Validation update (22/08/2026):** Rebuilt `release/CapCap.exe` from commit `2c03b6e`, ran the complete L4 Full Pipeline, and exported `CapCap_L4_dubbed_final.mp4` successfully. The former segment 103 TTS failure did not recur; the generated TTS voice track, background stem, non-overlapping SRT, and final H.264/AAC output were verified.
