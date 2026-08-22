@@ -368,3 +368,12 @@ Tài liệu này lưu trữ toàn bộ các lỗi kỹ thuật phát sinh trong 
 * **Fix Details:** `VoiceWorkflow._segment_tts_text()` now removes replacement/control characters and skips a cue when no letter or number remains. The visual subtitle timeline is preserved, no silent placeholder is created, and the invalid noise cue cannot block export.
 * **Related Files:** `app/workflows/voice_workflow.py`, `ERROR_LOG.md`.
 * **Validation update (22/08/2026):** Rebuilt `release/CapCap.exe` from commit `2c03b6e`, ran the complete L4 Full Pipeline, and exported `CapCap_L4_dubbed_final.mp4` successfully. The former segment 103 TTS failure did not recur; the generated TTS voice track, background stem, non-overlapping SRT, and final H.264/AAC output were verified.
+
+---
+
+### 34. Video quay xác minh không phát được bằng Windows Media Player
+* **Thời gian:** 22/08/2026
+* **Mô tả hiện tượng:** Windows Media Player báo `unsupported encoding settings` (0x80004005) khi mở `end_to_end_capcap_l4_final_verification.mp4`.
+* **Nguyên nhân gốc rễ (Root Cause):** Bản ghi desktop được FFmpeg mã hóa H.264 High 4:4:4 Predictive với pixel format `yuv444p`; đây không phải cấu hình MP4 được trình phát mặc định của Windows hỗ trợ.
+* **Cách xử lý (Fix Details):** Tái mã hóa video thành H.264 Constrained Baseline, `yuv420p`, kèm âm thanh AAC stereo và cờ `faststart`, rồi thay thế bản bàn giao cùng tên. Đã xác minh bằng `ffprobe`, giải mã toàn bộ bằng FFmpeg và mở thành công bằng trình phát kiểm thử.
+* **File liên quan:** `release/end_to_end_capcap_l4_final_verification.mp4`, `release/END_TO_END_L4_DUBBING_REPORT.md`, `ERROR_LOG.md`.
